@@ -12,6 +12,7 @@ use crate::engine::keyword_selection::{
 };
 use crate::models::article::Article;
 use crate::models::task::{Task, TaskArtifact};
+use crate::strategy::{match_cluster, ClusterStatus, ProjectStrategy};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -90,6 +91,8 @@ pub struct ContentBriefContext {
     pub articles: Vec<Article>,
     /// Valid internal link targets (normalized slugs, redirects excluded).
     pub valid_link_targets: HashSet<String>,
+    /// Content strategy from project.md. Empty → rank by token/word_count only.
+    pub strategy: ProjectStrategy,
 }
 
 /// Assemble the project-side context needed to build content briefs at task
@@ -104,8 +107,16 @@ pub(crate) fn load_content_brief_context(
     let articles = crate::engine::task_store::list_articles(conn, project_id).unwrap_or_default();
     // Valid targets = project slugs minus redirected slugs (needs the project
     // path for redirects.csv); without a project row there are no candidates.
-    let valid_link_targets = crate::engine::task_store::get_project(conn, project_id)
-        .and_then(|p| crate::engine::task_store::load_valid_link_targets(conn, project_id, &p.path))
+    let project = crate::engine::task_store::get_project(conn, project_id).ok();
+    let valid_link_targets = project
+        .as_ref()
+        .and_then(|p| {
+            crate::engine::task_store::load_valid_link_targets(conn, project_id, &p.path).ok()
+        })
+        .unwrap_or_default();
+    let strategy = project
+        .as_ref()
+        .map(|p| crate::strategy::load_project_strategy_from_project_path(&p.path))
         .unwrap_or_default();
     let (open_territories, saturated_themes) = extract_territory_summary(research_task);
     ContentBriefContext {
@@ -114,6 +125,7 @@ pub(crate) fn load_content_brief_context(
         saturated_themes,
         articles,
         valid_link_targets,
+        strategy,
     }
 }
 
@@ -251,6 +263,7 @@ pub fn build_content_brief(
             &ctx.valid_link_targets,
             keyword,
             MAX_INTERNAL_LINK_CANDIDATES,
+            Some(&ctx.strategy),
         ),
         ..Default::default()
     };
@@ -321,36 +334,111 @@ pub fn build_content_brief_artifact(brief: &ContentBrief, research_task_id: &str
 }
 
 /// Pick the top-N internal-link candidates for a keyword: articles whose slug
-/// is a valid link target (redirected slugs excluded), ranked by token overlap
-/// with the keyword (relevance), then word count (substance), then slug
-/// (deterministic tie-break).
+/// is a valid link target (redirected slugs excluded).
+///
+/// Ranking (when `strategy` is `Some` and non-empty):
+/// 1. Strategy bucket — same ACTIVE cluster as the write keyword, other ACTIVE,
+///    MAINTAIN, neutral/PLANNED/unmatched, LEGACY last
+/// 2. Publish status — prefer `published`; when ≥1 published valid target exists,
+///    drafts are excluded from the top-N (degraded: drafts only if none published)
+/// 3. Token overlap with the keyword, then word count desc, then slug
+///
+/// Empty / missing strategy preserves legacy token + word_count + slug order.
 pub fn select_internal_link_candidates(
     articles: &[Article],
     valid_link_targets: &HashSet<String>,
     keyword: &str,
     limit: usize,
+    strategy: Option<&ProjectStrategy>,
 ) -> Vec<InternalLinkCandidate> {
     let keyword_tokens = token_set(keyword);
-    let mut scored: Vec<(usize, i64, String, String)> = articles
+    // Empty strategy → legacy token/word_count ranking only (no bucket, no draft filter).
+    let strategy_active = strategy.filter(|s| !s.is_empty());
+
+    let mut valid: Vec<&Article> = articles
         .iter()
-        .map(|a| (crate::content::slug::normalize_url_slug(&a.url_slug), a))
-        .filter(|(slug, _)| valid_link_targets.contains(slug))
-        .map(|(slug, a)| {
+        .filter(|a| {
+            let slug = crate::content::slug::normalize_url_slug(&a.url_slug);
+            valid_link_targets.contains(&slug)
+        })
+        .collect();
+
+    // When strategy is present: prefer published; exclude drafts from top-N if any
+    // published valid target exists (degraded: drafts only when none published).
+    if strategy_active.is_some() {
+        let has_published = valid.iter().any(|a| is_published_status(&a.status));
+        if has_published {
+            valid.retain(|a| is_published_status(&a.status));
+        }
+    }
+
+    // Sort key: (strategy_bucket asc, draft_rank asc, relevance desc, word_count desc, slug asc)
+    let mut scored: Vec<(u8, u8, usize, i64, String, String)> = valid
+        .into_iter()
+        .map(|a| {
+            let slug = crate::content::slug::normalize_url_slug(&a.url_slug);
+            let cluster_text = a
+                .target_keyword
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(a.title.as_str());
             let haystack = format!("{} {}", a.target_keyword.as_deref().unwrap_or(""), a.title);
             let relevance = token_set(&haystack).intersection(&keyword_tokens).count();
-            (relevance, a.word_count, slug, a.title.clone())
+            let bucket = strategy_bucket(strategy_active, keyword, cluster_text);
+            let draft_rank: u8 = if strategy_active.is_some() && !is_published_status(&a.status) {
+                1
+            } else {
+                0
+            };
+            (bucket, draft_rank, relevance, a.word_count, slug, a.title.clone())
         })
         .collect();
     scored.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| b.1.cmp(&a.1))
-            .then_with(|| a.2.cmp(&b.2))
+        a.0.cmp(&b.0) // strategy bucket (lower = better)
+            .then_with(|| a.1.cmp(&b.1)) // published before draft (strategy mode)
+            .then_with(|| b.2.cmp(&a.2)) // relevance desc
+            .then_with(|| b.3.cmp(&a.3)) // word_count desc
+            .then_with(|| a.4.cmp(&b.4)) // slug asc
     });
     scored
         .into_iter()
         .take(limit)
-        .map(|(_, _, slug, title)| InternalLinkCandidate { slug, title })
+        .map(|(_, _, _, _, slug, title)| InternalLinkCandidate { slug, title })
         .collect()
+}
+
+/// Strategy rank bucket for a candidate relative to the write keyword.
+/// Lower is better. When strategy is empty/None every candidate is bucket 0.
+fn strategy_bucket(
+    strategy: Option<&ProjectStrategy>,
+    write_keyword: &str,
+    candidate_text: &str,
+) -> u8 {
+    let Some(strategy) = strategy else {
+        return 0;
+    };
+    let write_match = match_cluster(strategy, write_keyword);
+    let cand_match = match_cluster(strategy, candidate_text);
+    match cand_match {
+        Some((name, ClusterStatus::Active)) => {
+            if let Some((wname, ClusterStatus::Active)) = write_match {
+                if name == wname {
+                    return 0; // same ACTIVE cluster
+                }
+            }
+            1 // other ACTIVE
+        }
+        Some((_, ClusterStatus::Maintain)) => 2,
+        Some((_, ClusterStatus::Legacy)) => 4, // never above ACTIVE when strategy present
+        // PLANNED, Unknown, or unmatched
+        Some((_, ClusterStatus::Planned))
+        | Some((_, ClusterStatus::Unknown))
+        | None => 3,
+    }
+}
+
+fn is_published_status(status: &str) -> bool {
+    status.eq_ignore_ascii_case("published")
 }
 
 /// Lowercase alphanumeric tokens (length > 1) for keyword/article matching.
@@ -544,6 +632,37 @@ mod tests {
 
     // ── select_internal_link_candidates ───────────────────────────────────────
 
+    fn strategy_ops_and_services() -> ProjectStrategy {
+        use crate::strategy::{ClusterStatus, StrategyCluster};
+        ProjectStrategy {
+            clusters: vec![
+                StrategyCluster {
+                    name: "Ops".to_string(),
+                    status: ClusterStatus::Active,
+                    keywords: vec!["content ops".to_string(), "fix it process".to_string()],
+                },
+                StrategyCluster {
+                    name: "Services".to_string(),
+                    status: ClusterStatus::Legacy,
+                    keywords: vec!["web design packages".to_string(), "custom services".to_string()],
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    fn make_article_with_status(
+        slug: &str,
+        title: &str,
+        target_keyword: Option<&str>,
+        word_count: i64,
+        status: &str,
+    ) -> Article {
+        let mut a = make_article(slug, title, target_keyword, word_count);
+        a.status = status.to_string();
+        a
+    }
+
     #[test]
     fn link_candidates_filtered_to_valid_targets_and_ranked_by_relevance() {
         let articles = vec![
@@ -555,7 +674,8 @@ mod tests {
             .into_iter()
             .map(|s| s.to_string())
             .collect();
-        let candidates = select_internal_link_candidates(&articles, &valid, "covered call strategy", 15);
+        let candidates =
+            select_internal_link_candidates(&articles, &valid, "covered call strategy", 15, None);
         // Redirected slug is not a valid target and must be excluded.
         assert_eq!(candidates.len(), 2);
         // Relevance (token overlap with the keyword) outranks raw word count.
@@ -569,8 +689,134 @@ mod tests {
             .map(|i| make_article(&format!("post-{i:02}"), &format!("Post {i}"), None, 100))
             .collect();
         let valid: HashSet<String> = articles.iter().map(|a| a.url_slug.clone()).collect();
-        let candidates = select_internal_link_candidates(&articles, &valid, "anything", 15);
+        let candidates = select_internal_link_candidates(&articles, &valid, "anything", 15, None);
         assert_eq!(candidates.len(), 15);
+    }
+
+    #[test]
+    fn link_candidates_strategy_ranks_active_ops_above_legacy_services() {
+        // LEGACY service post shares generic tokens ("guide", "best") and has
+        // far higher word_count — without strategy it would win. With strategy
+        // the ACTIVE ops peer for the fix-it keyword must rank first.
+        let articles = vec![
+            make_article(
+                "legacy-services-mega",
+                "Best Guide to Custom Services Pricing",
+                Some("web design packages pricing"),
+                50_000,
+            ),
+            make_article(
+                "ops-fix-it-peer",
+                "Content Ops Fix-It Runbook",
+                Some("content ops fix it process"),
+                800,
+            ),
+        ];
+        let valid: HashSet<String> = articles.iter().map(|a| a.url_slug.clone()).collect();
+        let strategy = strategy_ops_and_services();
+        let candidates = select_internal_link_candidates(
+            &articles,
+            &valid,
+            "content ops fix it checklist",
+            15,
+            Some(&strategy),
+        );
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(
+            candidates[0].slug, "ops-fix-it-peer",
+            "ACTIVE ops peer must outrank high-word-count LEGACY services post"
+        );
+        assert_eq!(candidates[1].slug, "legacy-services-mega");
+    }
+
+    #[test]
+    fn link_candidates_strategy_prefers_published_over_draft() {
+        let articles = vec![
+            make_article_with_status(
+                "ops-draft",
+                "Content Ops Draft Guide",
+                Some("content ops"),
+                5000,
+                "draft",
+            ),
+            make_article_with_status(
+                "ops-published",
+                "Content Ops Published Peer",
+                Some("content ops"),
+                400,
+                "published",
+            ),
+        ];
+        let valid: HashSet<String> = articles.iter().map(|a| a.url_slug.clone()).collect();
+        let strategy = strategy_ops_and_services();
+        let candidates = select_internal_link_candidates(
+            &articles,
+            &valid,
+            "content ops fix it",
+            15,
+            Some(&strategy),
+        );
+        // Draft excluded when a published valid target exists.
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].slug, "ops-published");
+    }
+
+    #[test]
+    fn link_candidates_empty_strategy_preserves_token_word_count_order() {
+        // Empty strategy must not apply strategy buckets or draft exclusion —
+        // high-word-count generic-token LEGACY-like post can still win on
+        // token overlap + word_count alone (regression for pre-#259 behavior).
+        let articles = vec![
+            make_article(
+                "high-wc-generic",
+                "Best Guide Overview",
+                Some("best guide overview"),
+                50_000,
+            ),
+            make_article(
+                "low-wc-specific",
+                "Niche Topic",
+                Some("niche topic note"),
+                200,
+            ),
+        ];
+        let valid: HashSet<String> = articles.iter().map(|a| a.url_slug.clone()).collect();
+        let empty = ProjectStrategy::default();
+        let with_none =
+            select_internal_link_candidates(&articles, &valid, "best guide checklist", 15, None);
+        let with_empty = select_internal_link_candidates(
+            &articles,
+            &valid,
+            "best guide checklist",
+            15,
+            Some(&empty),
+        );
+        // "best guide" tokens hit high-wc article more than low-wc niche.
+        assert_eq!(with_none[0].slug, "high-wc-generic");
+        assert_eq!(with_empty[0].slug, "high-wc-generic");
+        assert_eq!(with_none, with_empty);
+    }
+
+    #[test]
+    fn link_candidates_strategy_allows_drafts_when_no_published() {
+        let articles = vec![make_article_with_status(
+            "ops-only-draft",
+            "Content Ops Draft Only",
+            Some("content ops"),
+            900,
+            "draft",
+        )];
+        let valid: HashSet<String> = articles.iter().map(|a| a.url_slug.clone()).collect();
+        let strategy = strategy_ops_and_services();
+        let candidates = select_internal_link_candidates(
+            &articles,
+            &valid,
+            "content ops fix it",
+            15,
+            Some(&strategy),
+        );
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].slug, "ops-only-draft");
     }
 
     // ── build_content_brief / description / artifact ──────────────────────────

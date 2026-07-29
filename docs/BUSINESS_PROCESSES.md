@@ -490,6 +490,7 @@ Handler: ClusterLinkHandler (3 steps)
 Step 1: cluster_link_scan (deterministic)
   ├─ Always rescans MDX peer /blog/ links (no short-lived cache)
   ├─ under-connected = incoming < 2; orphans = zero in + zero out
+  ├─ Residual zero_incoming / orphan discovery debt excludes drafts (published only)
   └─ Output: link_scan.json
   ↓
 Step 2: cluster_link_strategy (agentic)
@@ -503,7 +504,7 @@ Step 3: cluster_link_apply (deterministic)
 ```
 
 ### Post-write focus invariant
-After `write_article` / Path B submit, auto-spawned `cluster_and_link` attaches `focus_slug`. When peer MDX sources exist, strategy should recommend ≥1 inbound link TO that slug; apply reports honest residuals; post_actions may re-round (cap 3) when residual discovery debt remains (`orphans` or `zero_incoming` or focus still zero-inbound) and progress was made or focus still needs cover.
+After `write_article` / Path B submit, auto-spawned `cluster_and_link` attaches `focus_slug`. When peer MDX sources exist, strategy should recommend ≥1 inbound link TO that slug; apply reports honest residuals; post_actions may re-round (cap 3) when residual discovery debt remains (`orphans` or `zero_incoming` or focus still zero-inbound) and progress was made or focus still needs cover. Residual discovery lists intentionally omit drafts so unpublished pages do not drive re-rounds.
 
 ### Key Files
 - `engine/exec/content/cluster_link/` — scan, strategy, apply

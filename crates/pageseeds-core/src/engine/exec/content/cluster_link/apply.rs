@@ -417,8 +417,16 @@ pub(crate) fn rescan_link_residuals(task: &Task, project_path: &str) -> LinkResi
 
             if focus_slug.is_some() {
                 let focus_id = super::resolve_focus_article_id(focus_slug.as_deref(), &articles);
+                // Focus zero-incoming is graph truth from profiles — not residual
+                // discovery lists (which exclude drafts). Post-write focus may
+                // still be draft and must still drive must-cover re-rounds.
                 residuals.focus_still_zero_incoming = Some(match focus_id {
-                    Some(id) => result.zero_incoming_ids.contains(&id),
+                    Some(id) => result
+                        .profiles
+                        .iter()
+                        .find(|p| p.id == id)
+                        .map(|p| p.incoming_ids.is_empty())
+                        .unwrap_or(true),
                     // Unknown focus slug: treat as still-zero when any residual zero-incoming exists
                     None => residuals.zero_incoming_remaining > 0,
                 });
@@ -517,11 +525,12 @@ mod tests {
                 (1i64, "Hub", "hub", "content/blog/1_hub.mdx"),
                 (2i64, "Spoke", "spoke", "content/blog/2_spoke.mdx"),
             ] {
+                // Published so residual discovery debt lists include them.
                 conn.execute(
                     "INSERT INTO articles (
                         id, project_id, title, url_slug, file, status,
                         content_gaps_addressed, target_volume, word_count, review_count
-                     ) VALUES (?1, 'proj1', ?2, ?3, ?4, 'draft', '[]', 0, 0, 0)",
+                     ) VALUES (?1, 'proj1', ?2, ?3, ?4, 'published', '[]', 0, 0, 0)",
                     rusqlite::params![id, title, slug, file],
                 )
                 .unwrap();

@@ -80,19 +80,17 @@ pub(crate) fn exec_cluster_link_strategy(
     let focus_slug = super::task_focus_slug(task);
     let focus_id = resolve_focus_article_id(focus_slug.as_deref(), &articles);
 
-    // Compact article index (id, title, slug).
+    // Strategy (project.md) enriches the index with cluster + status so the
+    // agent can prefer ACTIVE/MAINTAIN published sources over LEGACY.
+    let strategy = crate::strategy::load_project_strategy_from_project_path(project_path);
+
+    // Compact article index (id, title, slug, status, optional cluster fields).
     // We intentionally omit `file` here; it adds ~35 bytes/article and is only
     // needed by the apply step, not the agent's reasoning. A separate
     // article_id_to_file.json mapping is written for the apply step.
     let mut index_entries: Vec<serde_json::Value> = articles
         .iter()
-        .map(|a| {
-            serde_json::json!({
-                "id": a.id,
-                "title": a.title,
-                "slug": a.url_slug,
-            })
-        })
+        .map(|a| article_index_entry(a, &strategy))
         .collect();
     // Prioritize focus article, then orphans / under-connected so they appear
     // first in the index. The agent can only link articles it can see.
@@ -128,14 +126,7 @@ pub(crate) fn exec_cluster_link_strategy(
             .any(|e| e["id"].as_i64() == Some(fid))
         {
             if let Some(a) = articles.iter().find(|a| a.id == fid) {
-                index_entries.insert(
-                    0,
-                    serde_json::json!({
-                        "id": a.id,
-                        "title": a.title,
-                        "slug": a.url_slug,
-                    }),
-                );
+                index_entries.insert(0, article_index_entry(a, &strategy));
                 if index_entries.len() > max_index {
                     index_entries.truncate(max_index.max(1));
                 }
@@ -295,10 +286,20 @@ pub(crate) fn exec_cluster_link_strategy(
              - Focus article id={fid}, slug=`{slug}` currently has **zero incoming** MDX peer links.\n\
              - You MUST recommend ≥1 link TO this slug (target_slug=`{slug}` / target_article_id={fid}) \
              from a thematically related peer source that is NOT the focus article itself.\n\
+             - Prefer a **published** source in an ACTIVE or MAINTAIN cluster over LEGACY when \
+             cluster_status is present on index entries.\n\
              - Prefer a source that already has content; do not leave focus undiscoverable.\n"
         )
     } else {
         String::new()
+    };
+
+    let strategy_priority = if strategy.is_empty() {
+        String::new()
+    } else {
+        "\n5. Prefer **published** sources in ACTIVE/MAINTAIN clusters over LEGACY when recommending \
+         inbound TO focus or orphans (use status + cluster_status on the article index).\n"
+            .to_string()
     };
 
     let prompt = format!(
@@ -311,7 +312,7 @@ pub(crate) fn exec_cluster_link_strategy(
 - Orphan article IDs (no links in or out): {orphan_list_json}
 - Zero-incoming article IDs (Google cannot discover — no pages link TO them): {zero_incoming_list_json}
 {focus_must_cover}
-## Article index (id, title, url slug)
+## Article index (id, title, url slug, status, optional cluster / cluster_status)
 
 {index_json}
 
@@ -332,7 +333,7 @@ Identify the top 20 most valuable internal links to add. Priorities:
 2. Give every orphan article at least one incoming link from a thematically related article.
 3. Link hub articles (broad topics) DOWN to relevant spoke articles.
 4. Link spoke articles UP to their parent hub when relevant.
-
+{strategy_priority}
 Return ONLY a valid JSON object — no markdown fences, no commentary.
 
 Output schema:
@@ -505,6 +506,33 @@ Requirements:
     }
 }
 
+/// Compact article index row for the strategy agent prompt.
+///
+/// Includes `status` always; adds `cluster` / `cluster_status` when
+/// [`crate::strategy::match_cluster`] maps the article's target_keyword
+/// (fallback: title).
+fn article_index_entry(
+    a: &crate::models::article::Article,
+    strategy: &crate::strategy::ProjectStrategy,
+) -> serde_json::Value {
+    let cluster_text = a
+        .target_keyword
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(a.title.as_str());
+    let mut entry = serde_json::json!({
+        "id": a.id,
+        "title": a.title,
+        "slug": a.url_slug,
+        "status": a.status,
+    });
+    if let Some((name, status)) = crate::strategy::match_cluster(strategy, cluster_text) {
+        entry["cluster"] = serde_json::Value::String(name.to_string());
+        entry["cluster_status"] = serde_json::Value::String(status.as_str().to_string());
+    }
+    entry
+}
+
 /// Whether strategy may short-circuit as "healthy" with no recommendations.
 ///
 /// Focus articles with zero inbound must never early-exit even if the under-
@@ -549,6 +577,51 @@ mod tests {
         assert!(!should_skip_strategy_as_healthy(0, true));
         assert!(!should_skip_strategy_as_healthy(3, false));
         assert!(!should_skip_strategy_as_healthy(1, true));
+    }
+
+    #[test]
+    fn article_index_entry_includes_status_and_cluster() {
+        use crate::strategy::{ClusterStatus, ProjectStrategy, StrategyCluster};
+        let strategy = ProjectStrategy {
+            clusters: vec![StrategyCluster {
+                name: "Ops".to_string(),
+                status: ClusterStatus::Active,
+                keywords: vec!["content ops".to_string()],
+            }],
+            ..Default::default()
+        };
+        let article = crate::models::article::Article {
+            id: 9,
+            title: "Ops Guide".into(),
+            url_slug: "ops-guide".into(),
+            file: "content/blog/09_ops.mdx".into(),
+            target_keyword: Some("content ops checklist".into()),
+            keyword_difficulty: None,
+            target_volume: 0,
+            published_date: None,
+            word_count: 100,
+            status: "published".into(),
+            review_status: None,
+            review_started_at: None,
+            last_reviewed_at: None,
+            review_count: 0,
+            content_gaps_addressed: vec![],
+            estimated_traffic_monthly: None,
+            project_id: "p".into(),
+            quality_score: None,
+            quality_grade: None,
+            quality_rated_at: None,
+            publishing_ready: None,
+            quality_breakdown: None,
+            page_type: None,
+            content_hash: None,
+            last_edited_at: None,
+        };
+        let entry = article_index_entry(&article, &strategy);
+        assert_eq!(entry["id"], 9);
+        assert_eq!(entry["status"], "published");
+        assert_eq!(entry["cluster"], "Ops");
+        assert_eq!(entry["cluster_status"], "active");
     }
 
     #[test]
@@ -686,13 +759,28 @@ mod tests {
         assert!(scan_result.success, "scan failed: {}", scan_result.message);
         let scan: serde_json::Value =
             serde_json::from_str(scan_result.output.as_deref().unwrap()).unwrap();
+        // Focus is draft in this fixture: residual discovery lists exclude drafts,
+        // but profiles still show graph truth (zero incoming).
+        let focus_profile = scan["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"].as_i64() == Some(3))
+            .expect("focus profile present");
         assert!(
-            scan["zero_incoming_ids"]
+            focus_profile["incoming_ids"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(false),
+            "focus profile should be zero-incoming"
+        );
+        assert!(
+            !scan["zero_incoming_ids"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .any(|v| v.as_i64() == Some(3)),
-            "focus should be zero-incoming"
+            "draft focus must not appear in residual zero_incoming_ids"
         );
 
         // Without a live agent we only assert the early-exit gate + focus resolve.
