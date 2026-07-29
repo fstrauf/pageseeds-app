@@ -147,8 +147,6 @@ pub struct NonCatalogGscSample {
     pub slug: String,
     pub impressions: f64,
     pub clicks: f64,
-    /// `"redirect_source_missing_map"` | `"unknown"`.
-    pub kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

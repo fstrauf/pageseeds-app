@@ -1248,7 +1248,6 @@ fn non_catalog_gsc_includes_never_catalog_excludes_mapped_redirect_sources() {
     assert_eq!(overview.non_catalog_gsc.sample[0].slug, "copy-ai-alternative");
     assert_eq!(overview.non_catalog_gsc.sample[0].impressions, 773.0);
     assert_eq!(overview.non_catalog_gsc.sample[0].clicks, 20.0);
-    assert_eq!(overview.non_catalog_gsc.sample[0].kind, "unknown");
     assert!(
         !overview
             .non_catalog_gsc
