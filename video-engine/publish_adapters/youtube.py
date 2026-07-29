@@ -242,7 +242,7 @@ def publish_youtube(clip_path: Path, video_path: Path, dry_run: bool) -> dict:
     clip = load_clip(clip_path)
     merge_published(clip_path, clip, "youtube", youtube_published)
 
-    return {
+    result = {
         "platform": "youtube",
         "status": "ok",
         "video_id": video_id,
@@ -250,3 +250,6 @@ def publish_youtube(clip_path: Path, video_path: Path, dry_run: bool) -> dict:
         "privacy": PRIVACY,
         "published": {"youtube": youtube_published},
     }
+    if thumb_note:
+        result["thumbnail_note"] = thumb_note
+    return result
