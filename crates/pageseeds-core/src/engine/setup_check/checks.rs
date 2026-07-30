@@ -180,6 +180,28 @@ pub(crate) fn check_optional_config_files(automation_dir: &Path, checks: &mut Ve
         });
     }
 
+    // Align with canonical readiness (#291): invalid/unsupported YAML + legacy
+    // also needs migration (not only missing YAML).
+    let status = crate::project_config::project_config_status(automation_dir);
+    if status.needs_migration {
+        let detail = match status.yaml_valid {
+            Some(false) => {
+                "project.yaml is present but invalid; legacy project.md / reddit_config.md can still be migrated"
+                    .into()
+            }
+            _ => "Legacy project.md / reddit_config.md present but project.yaml is missing"
+                .into(),
+        };
+        checks.push(SetupCheckItem {
+            id: "project_config_needs_migration".into(),
+            severity: Severity::Warn,
+            title: "Project config not migrated to project.yaml".into(),
+            detail,
+            fix_hint: Some(format!("Run: {}", status.hint)),
+            auto_fixable: false,
+        });
+    }
+
     // Check for reddit/_reply_guardrails.md
     let guardrails = automation_dir.join("reddit").join("_reply_guardrails.md");
     if !guardrails.exists() {

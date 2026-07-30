@@ -272,6 +272,48 @@ fn extract_subreddits(content: &str, section_title: &str) -> Vec<String> {
         .collect()
 }
 
+/// Extract compact search queries from the `## Query Keywords` section of reddit_config.md.
+///
+/// Flexible header matching: `## Query Keywords`, `## Keywords`, or `## Queries`.
+/// Supports quoted strings (`"phrase"`), backtick-wrapped tokens, and bare bullets.
+/// Used by the project-config migrator and by the exec fallback parser.
+pub fn extract_query_keywords(content: &str) -> Vec<String> {
+    let mut in_section = false;
+    let mut keywords: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        let is_keywords_header = trimmed.starts_with("## Query Keywords")
+            || trimmed.starts_with("## Keywords")
+            || trimmed.starts_with("## Queries");
+        if is_keywords_header {
+            in_section = true;
+            continue;
+        }
+        if in_section {
+            if trimmed.starts_with("##") {
+                break;
+            }
+            if let Some(raw) = trimmed.strip_prefix("- ") {
+                let raw = raw.trim();
+                if raw.starts_with('"') {
+                    if let Some(end) = raw[1..].find('"') {
+                        let kw = raw[1..end + 1].trim().to_string();
+                        if !kw.is_empty() {
+                            keywords.push(kw);
+                        }
+                        continue;
+                    }
+                }
+                let kw = raw.trim_matches('`').trim().to_string();
+                if !kw.is_empty() {
+                    keywords.push(kw);
+                }
+            }
+        }
+    }
+    keywords
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -363,5 +405,32 @@ mod tests {
     fn mention_stance_plain_text() {
         let cfg = parse_reddit_config("## Mention Stance\n- REQUIRED\n");
         assert_eq!(cfg.mention_stance, MentionStance::Required);
+    }
+
+    #[test]
+    fn extract_query_keywords_quoted_and_bare() {
+        let content = r#"
+## Query Keywords
+- "programmatic SEO"
+- bare keyword
+- `backticked`
+"#;
+        let kws = extract_query_keywords(content);
+        assert_eq!(
+            kws,
+            vec!["programmatic SEO", "bare keyword", "backticked"]
+        );
+    }
+
+    #[test]
+    fn extract_query_keywords_header_variants() {
+        assert_eq!(
+            extract_query_keywords("## Keywords\n- a\n- b\n"),
+            vec!["a", "b"]
+        );
+        assert_eq!(
+            extract_query_keywords("## Queries\n- q1\n"),
+            vec!["q1"]
+        );
     }
 }
