@@ -31,6 +31,16 @@ ALL_SECRET_KEYS = (
     "META_APP_SECRET",
 )
 
+# Config-ish keys overlaid with the same namespacing as secrets (not credentials).
+# Included so multi-brand expected channel (YOUTUBE_CHANNEL / {PROJECT}_YOUTUBE_CHANNEL)
+# resolves via load_secrets without a second env-file pass.
+OVERLAY_CONFIG_KEYS = (
+    "YOUTUBE_CHANNEL",
+)
+
+# Keys load_secrets overlays from files + process env + namespaced project keys.
+OVERLAY_KEYS = ALL_SECRET_KEYS + OVERLAY_CONFIG_KEYS
+
 SUPPORTED_PLATFORMS = frozenset({"youtube", "tiktok", "instagram"})
 
 
@@ -85,12 +95,44 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return out
 
 
+def normalize_project_id(project_id) -> str | None:
+    """Coerce project_id to a stripped string for namespacing; None/empty → None."""
+    if project_id is None:
+        return None
+    s = str(project_id).strip()
+    return s if s else None
+
+
+def channel_identity_matches(expected: str, title: str, custom_url: str) -> bool:
+    """True when expected equals channel title or customUrl after normalize.
+
+    Normalize: casefold, strip, strip leading ``@``.
+    """
+    exp = _normalize_channel_identity(expected)
+    if not exp:
+        return False
+    return exp == _normalize_channel_identity(title) or exp == _normalize_channel_identity(
+        custom_url
+    )
+
+
+def _normalize_channel_identity(value: str) -> str:
+    s = (value or "").strip().casefold()
+    if s.startswith("@"):
+        s = s[1:].strip()
+    return s
+
+
 def load_secrets(repo_root: Path | None, project_id: str | None = None) -> dict[str, str]:
     """Env-file chain matching Rust EnvResolver: first file wins per key, then process env.
 
     Multi-brand: keys may be namespaced per project as {PROJECT_ID_UPPER}_{KEY}
     (e.g. COFFEE_YOUTUBE_REFRESH_TOKEN). A namespaced value wins over the
     un-namespaced default for that project only.
+
+    Also overlays OVERLAY_CONFIG_KEYS (e.g. YOUTUBE_CHANNEL) the same way.
+    Warns on stderr when a namespaced YOUTUBE_REFRESH_TOKEN equals the default
+    (likely copy-paste wrong-brand token); does not fail.
     """
     files: list[Path] = []
     home = Path.home()
@@ -109,17 +151,30 @@ def load_secrets(repo_root: Path | None, project_id: str | None = None) -> dict[
             if k not in resolved:
                 resolved[k] = v
 
-    for key in ALL_SECRET_KEYS:
+    for key in OVERLAY_KEYS:
         if key not in resolved:
             env_val = os.environ.get(key, "").strip()
             if env_val:
                 resolved[key] = env_val
 
+    project_id = normalize_project_id(project_id)
     if project_id:
         prefix = project_id.upper().replace("-", "_") + "_"
-        for key in ALL_SECRET_KEYS:
+        default_yt_refresh = (resolved.get("YOUTUBE_REFRESH_TOKEN") or "").strip()
+        for key in OVERLAY_KEYS:
             namespaced = resolved.get(prefix + key) or os.environ.get(prefix + key, "").strip()
             if namespaced:
+                if (
+                    key == "YOUTUBE_REFRESH_TOKEN"
+                    and default_yt_refresh
+                    and namespaced == default_yt_refresh
+                ):
+                    print(
+                        f"publish: WARNING: {prefix}YOUTUBE_REFRESH_TOKEN equals "
+                        "YOUTUBE_REFRESH_TOKEN — namespaced token identical to default; "
+                        "likely wrong brand",
+                        file=sys.stderr,
+                    )
                 resolved[key] = namespaced
     return resolved
 

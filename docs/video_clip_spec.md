@@ -353,11 +353,15 @@ Facebook Login tokens (resumable rupload on `graph.facebook.com`).
    (`~/01_code/video-clip-backup/<project_id>/<slug>.mp4`, or config `output_dir`).
 4. **Secrets** via env-file chain (same precedence as Rust `EnvResolver`):  
    `~/.config/automation/secrets.env` → repo `.env.local` → repo `.env` → process env.  
-   YouTube: `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN`.  
+   YouTube: `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN`
+   (optional multi-brand: `{PROJECT}_YOUTUBE_REFRESH_TOKEN`, `YOUTUBE_CHANNEL` /
+   `{PROJECT}_YOUTUBE_CHANNEL`; real publish preflights `channels.list?mine=true` and
+   fail-closes on expected-channel mismatch — see `video-engine/README.md` YouTube auth).  
    TikTok: `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_REFRESH_TOKEN`.  
    Instagram: `META_ACCESS_TOKEN`, `IG_USER_ID` (optional session extend:
    `META_APP_ID`, `META_APP_SECRET`).
-5. **YouTube upload:** OAuth refresh_token grant → Data API v3 resumable upload;
+5. **YouTube upload:** OAuth refresh_token grant → channel preflight
+   (`channels.list?part=snippet&mine=true`) → Data API v3 resumable upload;
    `privacyStatus=private` until the OAuth app is verified.
 6. **TikTok inbox upload (#231):** OAuth refresh →
    `POST /v2/post/publish/inbox/video/init/` → `PUT` chunks to `upload_url` → optional
