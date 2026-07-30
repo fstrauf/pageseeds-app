@@ -586,12 +586,15 @@ when empty/stale via territory) then health (`promising` / `depleted` /
   `shortlist_refreshed` / `shortlist_refresh_reason` and territory
   `skip_reasons` when still empty after refresh — not “mystery empty.”
   Read `content_strategy` + `guidance` from the package before proposing seeds.
-- **Content strategy (`content_strategy` in research-context JSON, #255 / #275):**
+- **Content strategy (`content_strategy` in research-context JSON, #255 / #275 / #276):**
   On **research weeks**, seed order is **Primary / ACTIVE first** (intentional
   PLANNED when expanding a planned pillar). Territory shortlist and desk are
   **fallback only** when strategy is empty/unparseable **or** Primary/ACTIVE
-  themes are exhausted/covered — not equal peers. If strategy missing/empty,
-  read `<project-path>/.github/automation/project.md` Search Keywords + Content
+  themes are exhausted/covered — not equal peers. If `content_strategy.status`
+  is `empty` or `partial`, do **not** claim strategy gates applied — prefer fix
+  `project.md` (#279) or report skipped-research honesty before Path B seed
+  inventiveness. If strategy missing/empty, read
+  `<project-path>/.github/automation/project.md` Search Keywords + Content
   Clusters yourself; if still empty, degrade to shortlist/desk and say so.
 - **Never seed `do_not_expand` / LEGACY** (and deprioritize MAINTAIN vs
   ACTIVE/primary). After pull, reject those candidates before select-keywords.
