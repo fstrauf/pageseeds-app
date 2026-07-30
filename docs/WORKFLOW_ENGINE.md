@@ -299,7 +299,7 @@ Every article produced by `write_article`, `create_hub_page`, or `refresh_hub_pa
 The research shortlist is **dual fuel** (issue #274):
 
 1. **Territory GSC themes** — `research_territory_analysis` (open / mid-coverage / saturated) using desk tape `gsc_page_daily` impressions — not by final keyword selection. Territory produce also skips hard-blocked themes (`do_not_expand` / LEGACY via `strategy_blocks_expansion`) so they never land as expandable `pending` research fuel (issue #258).
-2. **Strategy Primary / ACTIVE inject** — operator-declared Primary Keywords and ACTIVE cluster keyword bullets from `project.md`, upserted as `source = strategy_primary` / `strategy_active` with `health_status = unproven` and seeds = `[phrase]`. Skips covered article `target_keyword`s, themes already pending/researched/covered, and hard-blocked phrases. Cap 15 per call. This breaks the GSC self-loop so Path B can expand product-gap terms with 0 impressions.
+2. **Strategy Primary / ACTIVE inject** — operator-declared Primary Keywords and ACTIVE cluster keyword bullets from `project.md`, upserted as `source = strategy_primary` / `strategy_active` with `health_status = unproven` and seeds = `[phrase]`. Skips covered article `target_keyword`s, themes already pending/researched/covered, and hard-blocked phrases. Cap 15 per call. This breaks the GSC self-loop so Path B can expand product-gap terms with 0 impressions. Operator checklist for the machine-parseable `project.md` contract: [PROJECT_MD_STRATEGY.md](./PROJECT_MD_STRATEGY.md).
 
 Other sources: `manual`, and documented future `coverage_gap` (no writer yet).
 
