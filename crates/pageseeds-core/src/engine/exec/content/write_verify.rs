@@ -94,6 +94,44 @@ pub(crate) fn exec_content_write_verify(
     let slug = crate::content::ops::slug_from_filename(file_name);
 
     let target_keyword = resolve_target_keyword(conn, task, file_name, &content);
+
+    // Exact target_keyword collision hard-fail (issue #272). Ingest may already
+    // have registered this file — exclude self by slug and/or id so re-verify
+    // does not false-positive. Empty keyword skips the gate.
+    if let Some(ref kw) = target_keyword {
+        let exclude_id = lookup_article_id(conn, &task.project_id, file_name);
+        match crate::content::article_index::find_target_keyword_collisions(
+            conn,
+            &task.project_id,
+            kw,
+            Some(slug.as_str()),
+            exclude_id,
+        ) {
+            Ok(colliders) if !colliders.is_empty() => {
+                let message =
+                    crate::content::article_index::format_keyword_collision_message(kw, &colliders);
+                let output = serde_json::to_string_pretty(&serde_json::json!({
+                    "check": "target_keyword_unique",
+                    "keyword": kw,
+                    "colliders": colliders,
+                }))
+                .ok();
+                return StepResult::fail_with_opt_output(
+                    format!(
+                        "Write verify failed target_keyword collision for {file_name}: {message}"
+                    ),
+                    output,
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                return StepResult::fail(format!(
+                    "Write verify failed: could not check target_keyword collisions: {e}"
+                ));
+            }
+        }
+    }
+
     let valid_link_targets =
         match crate::engine::task_store::load_valid_link_targets(conn, &task.project_id, project_path)
         {
@@ -127,6 +165,16 @@ pub(crate) fn exec_content_write_verify(
         output: serde_json::to_string(&report).ok(),
         artifact_key: None,
     }
+}
+
+/// Catalog article id for the written filename, if already registered.
+fn lookup_article_id(conn: &Connection, project_id: &str, filename: &str) -> Option<i64> {
+    conn.query_row(
+        "SELECT id FROM articles WHERE project_id = ?1 AND file LIKE ?2 LIMIT 1",
+        rusqlite::params![project_id, format!("%{filename}")],
+        |row| row.get::<_, i64>(0),
+    )
+    .ok()
 }
 
 fn structural_fail(report: &ValidateArticleResult, file_name: &str) -> StepResult {
