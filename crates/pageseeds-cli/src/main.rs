@@ -740,13 +740,33 @@ fn research_context(db_path: &str, project_id: &str) -> Result<serde_json::Value
     serde_json::to_value(package).map_err(|e| e.to_string())
 }
 
-/// Read-only: print the parsed project.md content strategy (keywords, clusters
-/// with lifecycle status, do_not_expand) as JSON. Empty strategy when no
-/// project.md exists — never an error.
+/// Print project content strategy as JSON (from `project.yaml` via ensure;
+/// auto-migrates legacy MD when needed). Empty strategy when no config —
+/// never an error. When auto-migrated, includes `project_config_auto_migrated: true`.
 fn strategy_cmd(project_path: &str) -> Result<serde_json::Value, String> {
-    let strategy =
-        pageseeds_core::strategy::load_project_strategy_from_project_path(project_path);
-    serde_json::to_value(strategy).map_err(|e| e.to_string())
+    use pageseeds_core::project_config::{ensure_project_config, EnsureAction};
+
+    let paths = pageseeds_core::engine::project_paths::ProjectPaths::from_path(project_path);
+    match ensure_project_config(paths.automation_dir()) {
+        Ok((config, action)) => {
+            let mut value =
+                serde_json::to_value(config.to_strategy()).map_err(|e| e.to_string())?;
+            if matches!(action, EnsureAction::AutoMigrated) {
+                if let serde_json::Value::Object(ref mut map) = value {
+                    map.insert(
+                        "project_config_auto_migrated".into(),
+                        serde_json::Value::Bool(true),
+                    );
+                }
+            }
+            Ok(value)
+        }
+        Err(_) => {
+            // Research-safe empty strategy (same contract as load_project_strategy).
+            let strategy = pageseeds_core::strategy::ProjectStrategy::default();
+            serde_json::to_value(strategy).map_err(|e| e.to_string())
+        }
+    }
 }
 
 /// Read-only: project.yaml vs legacy MD readiness as JSON.
@@ -1742,7 +1762,7 @@ const TOOLS: &[ToolHelp] = &[
     },
     ToolHelp {
         name: "strategy",
-        purpose: "Read-only: parsed project.md content strategy as JSON",
+        purpose: "Project content strategy as JSON (project.yaml via ensure; auto-migrates MD)",
         example: "strategy -i <id> -p <path>",
         section: "Path B research",
     },

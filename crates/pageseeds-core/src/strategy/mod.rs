@@ -1,9 +1,13 @@
-//! Project content strategy from `project.md`.
+//! Project content strategy (keywords + clusters).
 //!
-//! Typed loader for Search Keywords + Content Clusters sections used by the
-//! research pipeline (final selection gate + research-context package).
+//! **Structured strategy SOT** is `.github/automation/project.yaml`, loaded via
+//! [`crate::project_config::ensure_project_config`] (auto-migrates legacy MD on
+//! first need). Live loaders never re-parse MD when YAML is present or invalid.
 //!
-//! # NOTE: parse contract (v1)
+//! `project.md` remains brand/prose for enrichment; [`parse_project_strategy`]
+//! is the pure MD parser for the migrator and tests only.
+//!
+//! # NOTE: parse contract (v1) — MD (migrator / tests)
 //!
 //! Best-effort markdown walk — never fails research. Missing file/sections or
 //! malformed headings yield an empty or partial [`ProjectStrategy`].
@@ -26,6 +30,9 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+
+use crate::error::Error;
+use crate::project_config::{ensure_project_config, project_config_path, EnsureAction};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -98,36 +105,48 @@ impl ClusterStatus {
 
 // ─── Load ────────────────────────────────────────────────────────────────────
 
-/// Load strategy from `{automation_dir}/project.md`.
+/// Load strategy from structured project config (`project.yaml`).
 ///
-/// Missing or unreadable file → empty strategy (logged). Never panics.
+/// Routes through [`ensure_project_config`]: valid YAML loads as-is; missing
+/// YAML with legacy MD auto-migrates then loads; missing everything or invalid
+/// YAML yields an empty strategy (research-safe). Never panics. Does **not**
+/// fall back to parsing MD when YAML is present or invalid.
 pub fn load_project_strategy(automation_dir: &Path) -> ProjectStrategy {
-    let path = automation_dir.join("project.md");
-    match std::fs::read_to_string(&path) {
-        Ok(content) => {
-            let strategy = parse_project_strategy(&content);
+    let yaml_path = project_config_path(automation_dir);
+    match ensure_project_config(automation_dir) {
+        Ok((config, action)) => {
+            let strategy = config.to_strategy();
             if strategy.is_empty() {
                 log::info!(
-                    "[strategy] project.md at {} produced empty strategy (missing Search Keywords / Content Clusters sections?)",
-                    path.display()
+                    "[strategy] project config at {} produced empty strategy (missing Search Keywords / Content Clusters?)",
+                    yaml_path.display()
                 );
             } else {
                 log::info!(
                     "[strategy] loaded from {}: primary={}, do_not_expand={}, clusters={}",
-                    path.display(),
+                    yaml_path.display(),
                     strategy.primary_keywords.len(),
                     strategy.do_not_expand.len(),
                     strategy.clusters.len()
                 );
             }
+            if matches!(action, EnsureAction::AutoMigrated) {
+                log::info!(
+                    "[strategy] project config was auto-migrated from legacy MD at {}",
+                    yaml_path.display()
+                );
+            }
             strategy
         }
-        Err(e) => {
+        Err(Error::ConfigMissing(_)) => {
             log::info!(
-                "[strategy] no project.md at {} ({}) — empty strategy",
-                path.display(),
-                e
+                "[strategy] no project config at {} — empty strategy",
+                yaml_path.display()
             );
+            ProjectStrategy::default()
+        }
+        Err(e) => {
+            log::error!("[strategy] failed to load project config: {e}");
             ProjectStrategy::default()
         }
     }
@@ -141,8 +160,9 @@ pub fn load_project_strategy_from_project_path(project_path: &str) -> ProjectStr
 
 /// Canonical loader for call sites that have a DB connection + project id
 /// (research-context package, territory analysis). Resolves the project,
-/// derives the automation dir, and loads `project.md`. Graceful empty on any
-/// failure — strategy must never fail the surrounding workflow.
+/// derives the automation dir, and loads strategy via ensure/`project.yaml`.
+/// Graceful empty on any failure — strategy must never fail the surrounding
+/// workflow.
 pub fn load_for_project(conn: &rusqlite::Connection, project_id: &str) -> ProjectStrategy {
     match crate::engine::task_store::get_project(conn, project_id) {
         Ok(project) => {
@@ -179,7 +199,10 @@ enum KeywordBucket {
     DoNotExpand,
 }
 
-/// Parse strategy sections from project.md body. Pure; never panics.
+/// Parse strategy sections from a `project.md` body. Pure; never panics.
+///
+/// Intended for the migrator and tests only — live loaders use
+/// [`load_project_strategy`] / `project.yaml`.
 pub fn parse_project_strategy(markdown: &str) -> ProjectStrategy {
     let mut strategy = ProjectStrategy::default();
     let mut top = TopSection::None;
@@ -884,11 +907,13 @@ mod tests {
         let dir = tempfile_dir("missing");
         let s = load_project_strategy(&dir);
         assert!(s.is_empty());
+        assert!(!dir.join("project.yaml").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn load_reads_project_md_from_automation_dir() {
+        // MD-only → auto-migrate via ensure, then strategy equals pure MD parse.
         let dir = tempfile_dir("present");
         let mut f = std::fs::File::create(dir.join("project.md")).unwrap();
         f.write_all(FIXTURE.as_bytes()).unwrap();
@@ -896,6 +921,46 @@ mod tests {
         assert!(!s.is_empty());
         assert_eq!(s.primary_keywords.len(), 2);
         assert_eq!(s.clusters.len(), 4);
+        assert_eq!(s, parse_project_strategy(FIXTURE));
+        assert!(dir.join("project.yaml").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_invalid_yaml_does_not_fall_back_to_md() {
+        let dir = tempfile_dir("bad_yaml");
+        std::fs::write(dir.join("project.yaml"), "schema_version: [\nnot: valid\n").unwrap();
+        std::fs::write(dir.join("project.md"), FIXTURE).unwrap();
+
+        let s = load_project_strategy(&dir);
+        // Must not return MD-parsed fixture content.
+        assert!(s.is_empty());
+        assert_ne!(s, parse_project_strategy(FIXTURE));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_valid_yaml_ignores_md() {
+        let dir = tempfile_dir("yaml_sot");
+        let yaml = r#"
+schema_version: 1
+search_keywords:
+  primary:
+    - only from yaml
+  problem: []
+  audience: []
+  do_not_expand: []
+clusters: []
+"#;
+        std::fs::write(dir.join("project.yaml"), yaml).unwrap();
+        std::fs::write(dir.join("project.md"), FIXTURE).unwrap();
+
+        let s = load_project_strategy(&dir);
+        assert_eq!(s.primary_keywords, vec!["only from yaml"]);
+        assert!(s.clusters.is_empty());
+        assert_ne!(s, parse_project_strategy(FIXTURE));
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

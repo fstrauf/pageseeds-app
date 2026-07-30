@@ -86,6 +86,11 @@ impl ProjectPaths {
     pub fn social_output_dir(&self) -> PathBuf {
         self.automation_dir.join("social")
     }
+
+    /// `{automation_dir}/project.yaml` — typed [`crate::project_config::ProjectConfig`].
+    pub fn project_yaml(&self) -> PathBuf {
+        self.automation_dir.join("project.yaml")
+    }
 }
 
 /// Apply standard path substitutions to a command template string.
