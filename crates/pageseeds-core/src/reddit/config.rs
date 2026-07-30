@@ -8,12 +8,21 @@
 /// Section headers follow the same format as the PageSeeds CLI SKILL.md.
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
+/// Product-mention stance for Reddit replies.
+///
+/// YAML wire form is snake_case (`required`, `recommended`, …).
+/// [`from_str`](Self::from_str) / [`as_str`](Self::as_str) keep UPPERCASE tokens
+/// for markdown callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MentionStance {
     Required,
     Recommended,
+    #[default]
     Optional,
     Omit,
 }

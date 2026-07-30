@@ -20,6 +20,7 @@ pub mod license;
 pub mod live_site;
 pub mod logging;
 pub mod models;
+pub mod project_config;
 pub mod reddit;
 pub mod rig;
 pub mod seo;
