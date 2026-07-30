@@ -171,6 +171,26 @@ Buy: https://pageseeds.com"
                 .map_err(|e| e.to_string())
             })
         }
+        // CTR outcome closed-loop (issue #302): compare + report, no task fan-out.
+        "ctr-outcomes" => {
+            open_db(&db.to_string_lossy()).and_then(|conn| {
+                let compare = pageseeds_core::engine::exec::ctr_audit::run_ctr_outcome_compare(
+                    &conn,
+                    &project_id,
+                )
+                .map_err(|e| e.to_string())?;
+                let report = pageseeds_core::engine::exec::ctr_audit::run_ctr_outcome_report(
+                    &conn,
+                    &project_id,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "project_id": project_id,
+                    "compare": compare,
+                    "report": report,
+                }))
+            })
+        }
         "articles" => {
             let period_days: Option<i64> = flag(&args, "--period-days", "-d")
                 .and_then(|s| s.parse().ok());
@@ -1836,8 +1856,14 @@ const TOOLS: &[ToolHelp] = &[
     // Site State desk
     ToolHelp {
         name: "site-overview",
-        purpose: "Site health desk (totals, top pages, movers)",
+        purpose: "Site health desk (totals, top pages, movers, outcomes)",
         example: "site-overview -i <id> -p <path> [-d period-days]",
+        section: "Site State desk",
+    },
+    ToolHelp {
+        name: "ctr-outcomes",
+        purpose: "CTR closed-loop: verify deployments, classify ready outcomes, report rollup",
+        example: "ctr-outcomes -i <id>",
         section: "Site State desk",
     },
     ToolHelp {
@@ -2055,6 +2081,7 @@ mod tests {
             "merge-context",
             "merge-submit",
             "site-overview",
+            "ctr-outcomes",
             "articles",
             "article",
         ] {
@@ -2175,7 +2202,7 @@ mod tests {
         );
         assert_eq!(
             TOOLS.len(),
-            54,
+            57,
             "TOOLS inventory size (free+paid commercial boundary + operator tier)"
         );
         assert_eq!(paid.len(), 25, "paid set size must match docs/CLI_COMMERCIAL.md");

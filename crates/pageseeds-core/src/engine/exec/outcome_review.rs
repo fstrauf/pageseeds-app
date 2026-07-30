@@ -269,8 +269,8 @@ pub(crate) fn exec_content_outcome_compare(
         "reviewed_at": reviewed_at,
         "note": "Outcome history for this slug is persisted in content_outcome_results \
                  and attached to this task as the content_outcome_compare artifact. \
-                 Research/keeper-selection prompts may read it to weight topics by \
-                 measured outcomes.",
+                 Desk aggregates appear on site-overview.outcomes (content_* counts); \
+                 use that rollup for closed-loop measurement, not research prompts.",
     });
 
     StepResult {

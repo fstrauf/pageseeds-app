@@ -370,9 +370,138 @@ use super::topic_health::classify_topic_health;
         assert_eq!(v["slug"].as_str(), Some("written-post"));
         assert_eq!(v["parent_task_id"].as_str(), Some("write-nested-1"));
 
-        // Core helper is idempotent for same parent+slug.
+        // Core helper is idempotent for same project+slug (regardless of parent).
         let again = spawn_content_outcome_review_for_slug(&conn, &task, "written-post");
         assert_eq!(again.as_deref(), Some(review.id.as_str()));
+
+        let _ = std::fs::remove_dir_all(&project_path);
+    }
+
+    /// Nested write + Path B (different parent, same slug) ⇒ one open review,
+    /// re-anchored to the latest parent (issue #302).
+    #[test]
+    fn content_outcome_review_dedupes_across_parents_and_reanchors() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        let project_path = std::env::temp_dir().join(format!(
+            "pageseeds-pa-outcome-dedupe-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = std::fs::remove_dir_all(&project_path);
+        std::fs::create_dir_all(project_path.join("content/blog")).unwrap();
+        std::fs::write(
+            project_path.join("content/blog/shared-slug.mdx"),
+            "---\ntitle: Shared\nslug: shared-slug\n---\n\n# Shared\n\nbody\n",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('proj1', 'Test', ?1, 1, 'workspace')",
+            [project_path.to_str().unwrap()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles (
+                id, project_id, title, url_slug, file, status, target_keyword,
+                content_gaps_addressed, target_volume, word_count, review_count, content_hash
+             ) VALUES (1, 'proj1', 'Shared', 'shared-slug',
+                       'content/blog/shared-slug.mdx', 'draft', 'kw', '[]', 0, 10, 0, 'h')",
+            [],
+        )
+        .unwrap();
+
+        // Parent A: nested write_article
+        let mut write_parent = make_task();
+        write_parent.id = "write-nested-a".to_string();
+        write_parent.task_type = "write_article".to_string();
+        write_parent.project_id = "proj1".to_string();
+        write_parent.status = TaskStatus::Done;
+        write_parent.description = Some(
+            "File: content/blog/shared-slug.mdx | Target keyword: shared".to_string(),
+        );
+        crate::engine::task_store::create_task(&conn, &write_parent).unwrap();
+
+        let first =
+            spawn_content_outcome_review_for_slug(&conn, &write_parent, "shared-slug")
+                .expect("first spawn");
+        let review_before = crate::engine::task_store::get_task(&conn, &first).unwrap();
+        let not_before_1 = review_before.not_before.clone();
+        let art_before = review_before
+            .artifacts
+            .iter()
+            .find(|a| a.key == "content_outcome_target")
+            .expect("content_outcome_target");
+        let v_before: serde_json::Value =
+            serde_json::from_str(art_before.content.as_deref().unwrap_or("{}")).unwrap();
+        assert_eq!(v_before["parent_task_id"].as_str(), Some("write-nested-a"));
+
+        // Parent B: Path B synthetic (not persisted) — different parent, same slug
+        let mut path_b = make_task();
+        path_b.id = "path-b:shared-slug".to_string();
+        path_b.task_type = "write_article".to_string();
+        path_b.project_id = "proj1".to_string();
+        path_b.status = TaskStatus::Done;
+
+        // Ensure not_before can move forward if clocks are equal within resolution
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        let second =
+            spawn_content_outcome_review_for_slug(&conn, &path_b, "shared-slug")
+                .expect("second spawn reuses");
+        assert_eq!(
+            second, first,
+            "same project+slug must return the one open review"
+        );
+
+        // Exactly one open content_outcome_review for this project/slug
+        let all = crate::engine::task_store::list_tasks(&conn, "proj1").unwrap();
+        let open_reviews: Vec<_> = all
+            .iter()
+            .filter(|t| {
+                t.task_type == "content_outcome_review"
+                    && matches!(
+                        t.status,
+                        TaskStatus::Todo | TaskStatus::Queued | TaskStatus::InProgress
+                    )
+            })
+            .collect();
+        assert_eq!(
+            open_reviews.len(),
+            1,
+            "must not duplicate open reviews; got {:?}",
+            open_reviews.iter().map(|t| &t.id).collect::<Vec<_>>()
+        );
+
+        let review = crate::engine::task_store::get_task(&conn, &first).unwrap();
+        let art = review
+            .artifacts
+            .iter()
+            .find(|a| a.key == "content_outcome_target")
+            .expect("content_outcome_target");
+        let v: serde_json::Value =
+            serde_json::from_str(art.content.as_deref().unwrap_or("{}")).unwrap();
+        assert_eq!(
+            v["parent_task_id"].as_str(),
+            Some("path-b:shared-slug"),
+            "re-anchored parent_task_id must be latest ship"
+        );
+        assert_eq!(v["slug"].as_str(), Some("shared-slug"));
+        assert_eq!(v["parent_task_type"].as_str(), Some("write_article"));
+        assert!(
+            review.not_before.is_some(),
+            "not_before refreshed after re-anchor"
+        );
+        // not_before should be refreshed (at least present; may equal if same second)
+        assert!(review.not_before >= not_before_1 || review.not_before == not_before_1);
+        assert!(
+            review
+                .description
+                .as_deref()
+                .unwrap_or("")
+                .contains("path-b:shared-slug"),
+            "description should point at latest parent: {:?}",
+            review.description
+        );
 
         let _ = std::fs::remove_dir_all(&project_path);
     }

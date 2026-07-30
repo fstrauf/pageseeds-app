@@ -258,9 +258,10 @@ desk (site-overview.striking_distance first; fallback filter only if needed)
 
 **CTR closed-loop (no review-task fan-out):** measurement = **`gsc_page_daily`
 tape** + sparse **`ctr_outcomes`** change events when a CTR fix ships (Path B
-`fix-submit -k ctr` or nested `fix_ctr_article`). After ~14 days, for
-high-impression ships, re-read desk (`article` / `gsc-performance` / daily
-windows) — not by running legacy `ctr_outcome_review` tasks.
+`fix-submit -k ctr` or nested `fix_ctr_article`). In the measurement pass, run
+`pageseeds-cli ctr-outcomes` (verifies live titles, classifies ready rows, rolls
+up report). Also read `site-overview.outcomes` for stuck/pending counts. Do
+**not** run legacy `ctr_outcome_review` tasks.
 
 **Content closed-loop:** system-spawned `content_outcome_review` rows compare
 **GSC snapshot windows** on `gsc_page_daily` (not live SERP / rank trackers /
@@ -293,7 +294,7 @@ under soft path A.
 | Rank-tracker / SERP position as weekly outcome (Accuranker-class) (#202 / #210) | Measure with GSC desk + `gsc_page_daily` tape; SERP only if research/diagnostic path already justified |
 | Nested `execute-task` LLM for write/fix/merge when Path B tools exist | Path B package → session edit → submit |
 | `create-task content_outcome_review` / may-create addition | System spawn only; execute **due** rows (see soft path A) |
-| `ctr_outcome_review` as weekly action backlog (#152) | Cancel / ignore; desk re-read for CTR closed-loop |
+| `ctr_outcome_review` as weekly action backlog (#152) | Cancel / ignore; call `ctr-outcomes` for CTR closed-loop |
 | Video clips as weekly spine / may-create / multi-clip batch (#222) | Elective via `/video-clip` only — see [Optional post-publish video](#optional-post-publish-video-elective) |
 | Territory / top-shortlist-by-impressions as default **new-article** seeds when Primary or ACTIVE exist (#275) | Research week: `research-pull -K` from `content_strategy` Primary + ACTIVE first; shortlist/desk only if strategy empty or Primary/ACTIVE exhausted |
 
@@ -430,7 +431,8 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 
 | Tool | Role |
 |------|------|
-| `site-overview` | Compact weekly desk entry: totals, top pages, movers, freshness, hints, plus `zero_impression` / `striking_distance` / `hard_cannibalization` inventory (#204) and `redirect_equity` / `non_catalog_gsc` residual inventory (#261) |
+| `site-overview` | Compact weekly desk entry: totals, top pages, movers, freshness, hints, plus `zero_impression` / `striking_distance` / `hard_cannibalization` inventory (#204), `redirect_equity` / `non_catalog_gsc` residual inventory (#261), and `outcomes` aggregates (#302) |
+| `ctr-outcomes` | CTR closed-loop measure: deploy-verify + classify ready `ctr_outcomes` + report rollup (#302). Free desk tool; not a task type. |
 | `articles` | GSC-aware catalog list (filters: status, min impressions, period) |
 | `article` | Full package for one slug: frontmatter, body outline, top queries, neighbors (`-S`/`--slug`) |
 | `gsc-performance` | Site/page traffic, CTR, impressions (`-l`, default 50, max 200) |
@@ -860,7 +862,7 @@ pageseeds-cli fix-context -i <id> -p <path> -S <slug> -k content|ctr [-g goals]
 # session agent edits full file using package
 pageseeds-cli fix-submit -i <id> -p <path> -S <slug> -k content|ctr [--file mdx]
 # → content: +30d content_outcome_review scheduled
-# → ctr: ctr_outcomes change event only (desk re-read later)
+# → ctr: ctr_outcomes change event only (measure later via ctr-outcomes)
 ```
 
 Nested fallback when needed: `create-task fix_content_article -S <slug>` +
@@ -1032,7 +1034,7 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 
 - Striking-distance (pos **7–13**, impr ≥ ~200): read `site-overview.striking_distance` first; optional soft prior → ≤**2** existing actions; no campaign type / DataForSEO / default full IHC or `ctr_audit`.  
 - Outcomes = **GSC windows** (`gsc_page_daily`), not live SERP / DataForSEO.  
-- `ctr_outcome_review` cancel/ignore; `content_outcome_review` execute when due — do not conflate.  
+- `ctr_outcome_review` cancel/ignore; call `ctr-outcomes` for CTR measure; `content_outcome_review` execute when due — do not conflate.  
 - Low CTR → desk-selected `fix_content_article` (`-S`); not default full `ctr_audit`.  
 - Not-indexed → desk-selected `fix_indexing_internal_links` / `fix_content_article -S`; not default full `indexing_health_campaign`.  
 - Empty research shortlist → call `research-context` first (auto-refresh); `update_research_shortlist` only if force/fail. 

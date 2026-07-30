@@ -229,6 +229,109 @@ fn site_overview_totals_articles_live() {
     let _ = fs::remove_dir_all(&project);
 }
 
+/// Desk `outcomes` aggregates content_outcome_results + ctr_outcomes (#302).
+#[test]
+fn site_overview_outcomes_aggregate() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(&conn, "proj1", 1, "alpha", "Alpha", "content/a.mdx", "published", 200);
+    insert_article(&conn, "proj1", 2, "beta", "Beta", "content/b.mdx", "published", 150);
+
+    let now = Utc::now().to_rfc3339();
+    crate::db::insert_content_outcome_result(
+        &conn,
+        &crate::db::ContentOutcomeResult {
+            project_id: "proj1".into(),
+            slug: "alpha".into(),
+            parent_task_type: "write_article".into(),
+            parent_task_id: "write-1".into(),
+            classification: "improved".into(),
+            baseline_json: "{}".into(),
+            recent_json: "{}".into(),
+            reviewed_at: now.clone(),
+        },
+    )
+    .unwrap();
+    crate::db::insert_content_outcome_result(
+        &conn,
+        &crate::db::ContentOutcomeResult {
+            project_id: "proj1".into(),
+            slug: "beta".into(),
+            parent_task_type: "fix_content_article".into(),
+            parent_task_id: "fix-1".into(),
+            classification: "regressed".into(),
+            baseline_json: "{}".into(),
+            recent_json: "{}".into(),
+            reviewed_at: now.clone(),
+        },
+    )
+    .unwrap();
+
+    crate::db::set_ctr_outcome(
+        &conn,
+        &crate::models::ctr::CtrOutcome {
+            project_id: "proj1".into(),
+            article_id: 1,
+            fix_task_id: "ctr-fix-1".into(),
+            baseline_start: "2026-06-01T00:00:00Z".into(),
+            baseline_end: "2026-06-29T00:00:00Z".into(),
+            after_start: None,
+            after_end: None,
+            baseline_clicks: 10.0,
+            baseline_impressions: 500.0,
+            baseline_ctr: 0.02,
+            baseline_position: 8.0,
+            after_clicks: None,
+            after_impressions: None,
+            after_ctr: None,
+            after_position: None,
+            position_delta: None,
+            outcome_status: "pending".into(),
+            deployed_at: None,
+            reviewed_at: None,
+        },
+    )
+    .unwrap();
+    crate::db::set_ctr_outcome(
+        &conn,
+        &crate::models::ctr::CtrOutcome {
+            project_id: "proj1".into(),
+            article_id: 2,
+            fix_task_id: "ctr-fix-2".into(),
+            baseline_start: "2026-06-01T00:00:00Z".into(),
+            baseline_end: "2026-06-29T00:00:00Z".into(),
+            after_start: None,
+            after_end: None,
+            baseline_clicks: 5.0,
+            baseline_impressions: 200.0,
+            baseline_ctr: 0.025,
+            baseline_position: 12.0,
+            after_clicks: Some(8.0),
+            after_impressions: Some(300.0),
+            after_ctr: Some(0.027),
+            after_position: Some(10.0),
+            position_delta: Some(-2.0),
+            outcome_status: "improved".into(),
+            deployed_at: Some(now.clone()),
+            reviewed_at: Some(now),
+        },
+    )
+    .unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.outcomes.content_total, 2);
+    assert_eq!(overview.outcomes.content_improved, 1);
+    assert_eq!(overview.outcomes.content_regressed, 1);
+    assert_eq!(overview.outcomes.ctr_total, 2);
+    assert_eq!(overview.outcomes.ctr_improved, 1);
+    assert_eq!(overview.outcomes.ctr_pending, 1);
+    assert_eq!(overview.outcomes.ctr_stuck_pending, 1);
+
+    let _ = fs::remove_dir_all(&project);
+}
+
 #[test]
 fn site_overview_evidence_hint_when_no_index() {
     let conn = in_memory_db();

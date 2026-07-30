@@ -21,6 +21,7 @@ use crate::engine::task_store;
 use crate::error::{Error, Result};
 use crate::models::article::Article;
 
+use super::outcomes_inventory::build_outcomes_inventory;
 use super::residual_inventory::{build_non_catalog_gsc_inventory, build_redirect_equity_inventory};
 use super::types::*;
 
@@ -240,6 +241,8 @@ pub fn build_site_overview(
         &redirected,
     );
 
+    let outcomes = build_outcomes_inventory(conn, project_id);
+
     let hints = build_hints(
         has_any_gsc,
         &freshness,
@@ -279,6 +282,7 @@ pub fn build_site_overview(
         hard_cannibalization,
         redirect_equity,
         non_catalog_gsc,
+        outcomes,
         hints,
     })
 }

@@ -19,30 +19,27 @@ const MIN_AFTER_IMPRESSIONS: f64 = 100.0;
 /// Per-day click-loss threshold that counts as a regression (~3 clicks/month).
 const REGRESSED_CLICKS_PER_DAY: f64 = -0.1;
 
-/// Load deployed outcomes, fetch current GSC metrics, compare before/after.
-pub(crate) fn exec_ctr_outcome_compare(
-    task: &Task,
-    _project_path: &str,
+/// Conn-level CTR outcome compare (issue #302). Verifies deployments, classifies
+/// ready rows, and returns a summary JSON. Callable from CLI and workflow steps.
+///
+/// May hit the network for live title verification when pending outcomes have a
+/// rendered-audit URL. Pure DB paths (empty set, no URL) need no network.
+pub fn run_ctr_outcome_compare(
     conn: &rusqlite::Connection,
-) -> StepResult {
-    let outcomes = match crate::db::list_ctr_outcomes(conn, &task.project_id) {
-        Ok(o) => o,
-        Err(e) => {
-            return StepResult::fail(format!("Failed to load outcomes: {}", e));
-        }
-    };
+    project_id: &str,
+) -> crate::error::Result<serde_json::Value> {
+    let outcomes = crate::db::list_ctr_outcomes(conn, project_id)?;
 
     if outcomes.is_empty() {
-        return StepResult {
-            success: true,
-            message: "No CTR outcomes to review".to_string(),
-            output: Some("[]".to_string()),
-            artifact_key: None,
-        };
+        return Ok(serde_json::json!({
+            "ready": 0,
+            "waiting": 0,
+            "results": [],
+            "pending": [],
+        }));
     }
 
-    let articles = crate::engine::task_store::list_articles(conn, &task.project_id)
-        .unwrap_or_default();
+    let articles = crate::engine::task_store::list_articles(conn, project_id).unwrap_or_default();
 
     let now = chrono::Utc::now();
     let mut ready = Vec::new();
@@ -58,7 +55,7 @@ pub(crate) fn exec_ctr_outcome_compare(
             outcome.outcome_status.as_str(),
             "pending" | "deployment_unverified"
         ) {
-            let url = lookup_rendered_audit_url(conn, &task.project_id, outcome.article_id);
+            let url = lookup_rendered_audit_url(conn, project_id, outcome.article_id);
             let source_title = articles
                 .iter()
                 .find(|a| a.id == outcome.article_id)
@@ -153,7 +150,7 @@ pub(crate) fn exec_ctr_outcome_compare(
 
         // ── After-metrics + classification ──────────────────────────────────
         let (after_clicks, after_impressions, after_ctr, after_position) =
-            fetch_after_metrics(conn, &task.project_id, outcome.article_id);
+            fetch_after_metrics(conn, project_id, outcome.article_id);
 
         let after_start = deployed_at.to_rfc3339();
         let after_end = now.to_rfc3339();
@@ -208,37 +205,21 @@ pub(crate) fn exec_ctr_outcome_compare(
         }));
     }
 
-    let summary = serde_json::json!({
+    Ok(serde_json::json!({
         "ready": ready.len(),
         "waiting": waiting.len(),
         "results": ready,
         "pending": waiting,
-    });
-
-    StepResult {
-        success: true,
-        message: format!(
-            "CTR outcome review: {} ready, {} waiting for more data",
-            ready.len(),
-            waiting.len()
-        ),
-        output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
-        artifact_key: None,
-    }
+    }))
 }
 
-/// Generate a structured report artifact from the outcome comparison.
-pub(crate) fn exec_ctr_outcome_report(
-    task: &Task,
-    _project_path: &str,
+/// Conn-level CTR outcome rollup report (issue #302). Aggregates `ctr_outcomes`
+/// rows by status — pure DB, no network.
+pub fn run_ctr_outcome_report(
     conn: &rusqlite::Connection,
-) -> StepResult {
-    let outcomes = match crate::db::list_ctr_outcomes(conn, &task.project_id) {
-        Ok(o) => o,
-        Err(e) => {
-            return StepResult::fail(format!("Failed to load outcomes: {}", e));
-        }
-    };
+    project_id: &str,
+) -> crate::error::Result<serde_json::Value> {
+    let outcomes = crate::db::list_ctr_outcomes(conn, project_id)?;
 
     let mut improved = 0usize;
     let mut regressed = 0usize;
@@ -265,8 +246,8 @@ pub(crate) fn exec_ctr_outcome_report(
         }
     }
 
-    let report = serde_json::json!({
-        "project_id": task.project_id,
+    Ok(serde_json::json!({
+        "project_id": project_id,
         "reviewed_at": chrono::Utc::now().to_rfc3339(),
         "summary": {
             "total_tracked": outcomes.len(),
@@ -281,16 +262,63 @@ pub(crate) fn exec_ctr_outcome_report(
             "total_click_gain": total_after_clicks - total_baseline_clicks,
         },
         "outcomes": outcomes,
-    });
+    }))
+}
 
-    StepResult {
-        success: true,
-        message: format!(
-            "CTR outcome report: {} improved, {} regressed, {} neutral, {} insufficient data, {} deployment unverified, {} pending",
-            improved, regressed, neutral, insufficient_data, deployment_unverified, pending
-        ),
-        output: Some(serde_json::to_string_pretty(&report).unwrap_or_default()),
-        artifact_key: None,
+/// Load deployed outcomes, fetch current GSC metrics, compare before/after.
+pub(crate) fn exec_ctr_outcome_compare(
+    task: &Task,
+    _project_path: &str,
+    conn: &rusqlite::Connection,
+) -> StepResult {
+    match run_ctr_outcome_compare(conn, &task.project_id) {
+        Ok(summary) => {
+            let ready = summary["ready"].as_u64().unwrap_or(0);
+            let waiting = summary["waiting"].as_u64().unwrap_or(0);
+            let message = if ready == 0 && waiting == 0 {
+                "No CTR outcomes to review".to_string()
+            } else {
+                format!(
+                    "CTR outcome review: {} ready, {} waiting for more data",
+                    ready, waiting
+                )
+            };
+            StepResult {
+                success: true,
+                message,
+                output: Some(serde_json::to_string_pretty(&summary).unwrap_or_default()),
+                artifact_key: None,
+            }
+        }
+        Err(e) => StepResult::fail(format!("Failed to load outcomes: {}", e)),
+    }
+}
+
+/// Generate a structured report artifact from the outcome comparison.
+pub(crate) fn exec_ctr_outcome_report(
+    task: &Task,
+    _project_path: &str,
+    conn: &rusqlite::Connection,
+) -> StepResult {
+    match run_ctr_outcome_report(conn, &task.project_id) {
+        Ok(report) => {
+            let s = &report["summary"];
+            StepResult {
+                success: true,
+                message: format!(
+                    "CTR outcome report: {} improved, {} regressed, {} neutral, {} insufficient data, {} deployment unverified, {} pending",
+                    s["improved"].as_u64().unwrap_or(0),
+                    s["regressed"].as_u64().unwrap_or(0),
+                    s["neutral"].as_u64().unwrap_or(0),
+                    s["insufficient_data"].as_u64().unwrap_or(0),
+                    s["deployment_unverified"].as_u64().unwrap_or(0),
+                    s["pending"].as_u64().unwrap_or(0),
+                ),
+                output: Some(serde_json::to_string_pretty(&report).unwrap_or_default()),
+                artifact_key: None,
+            }
+        }
+        Err(e) => StepResult::fail(format!("Failed to load outcomes: {}", e)),
     }
 }
 
@@ -723,5 +751,104 @@ mod tests {
             1
         );
         assert_eq!(window_days("garbage", "2026-07-01T00:00:00Z"), 1);
+    }
+
+    /// Empty project → structured empty compare summary (no network).
+    #[test]
+    fn run_ctr_outcome_compare_empty_project() {
+        let conn = test_conn();
+        let summary = run_ctr_outcome_compare(&conn, "proj-test").unwrap();
+        assert_eq!(summary["ready"], 0);
+        assert_eq!(summary["waiting"], 0);
+        assert_eq!(summary["results"].as_array().unwrap().len(), 0);
+        assert_eq!(summary["pending"].as_array().unwrap().len(), 0);
+    }
+
+    /// Report aggregates by outcome_status without network.
+    #[test]
+    fn run_ctr_outcome_report_aggregates_statuses() {
+        let conn = test_conn();
+        seed_article_row(&conn, 1, "a");
+        seed_article_row(&conn, 2, "b");
+        let now = chrono::Utc::now().to_rfc3339();
+        for (article_id, status, after) in [
+            (1i64, "improved", Some(20.0)),
+            (2i64, "pending", None),
+        ] {
+            crate::db::set_ctr_outcome(
+                &conn,
+                &crate::models::ctr::CtrOutcome {
+                    project_id: "proj-test".into(),
+                    article_id,
+                    fix_task_id: format!("fix-{article_id}"),
+                    baseline_start: "2026-06-01T00:00:00Z".into(),
+                    baseline_end: "2026-06-29T00:00:00Z".into(),
+                    after_start: None,
+                    after_end: None,
+                    baseline_clicks: 10.0,
+                    baseline_impressions: 500.0,
+                    baseline_ctr: 0.02,
+                    baseline_position: 8.0,
+                    after_clicks: after,
+                    after_impressions: None,
+                    after_ctr: None,
+                    after_position: None,
+                    position_delta: None,
+                    outcome_status: status.into(),
+                    deployed_at: None,
+                    reviewed_at: Some(now.clone()),
+                },
+            )
+            .unwrap();
+        }
+
+        let report = run_ctr_outcome_report(&conn, "proj-test").unwrap();
+        assert_eq!(report["project_id"], "proj-test");
+        assert_eq!(report["summary"]["total_tracked"], 2);
+        assert_eq!(report["summary"]["improved"], 1);
+        assert_eq!(report["summary"]["pending"], 1);
+        assert_eq!(report["summary"]["total_baseline_clicks"], 20.0);
+        assert_eq!(report["summary"]["total_after_clicks"], 20.0);
+    }
+
+    /// Pending without rendered URL stays awaiting (no network hit).
+    #[test]
+    fn run_ctr_outcome_compare_pending_without_url_awaits_deploy() {
+        let conn = test_conn();
+        seed_article_row(&conn, 1, "pending-article");
+        let baseline_end = chrono::Utc::now().to_rfc3339();
+        crate::db::set_ctr_outcome(
+            &conn,
+            &crate::models::ctr::CtrOutcome {
+                project_id: "proj-test".into(),
+                article_id: 1,
+                fix_task_id: "fix-1".into(),
+                baseline_start: "2026-06-01T00:00:00Z".into(),
+                baseline_end,
+                after_start: None,
+                after_end: None,
+                baseline_clicks: 5.0,
+                baseline_impressions: 200.0,
+                baseline_ctr: 0.025,
+                baseline_position: 10.0,
+                after_clicks: None,
+                after_impressions: None,
+                after_ctr: None,
+                after_position: None,
+                position_delta: None,
+                outcome_status: "pending".into(),
+                deployed_at: None,
+                reviewed_at: None,
+            },
+        )
+        .unwrap();
+
+        let summary = run_ctr_outcome_compare(&conn, "proj-test").unwrap();
+        assert_eq!(summary["ready"], 0);
+        assert_eq!(summary["waiting"], 1);
+        assert_eq!(
+            summary["pending"][0]["status"].as_str(),
+            Some("awaiting_deployment")
+        );
     }
 }

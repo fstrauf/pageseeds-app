@@ -31,6 +31,10 @@ pub(crate) fn spawn_content_outcome_review(ctx: &PostTaskContext<'_>) -> Option<
 /// position (from the article's stored GSC metadata; empty baseline is fine
 /// for brand-new articles) as the `content_outcome_target` artifact consumed
 /// by `exec::outcome_review::exec_content_outcome_compare`.
+///
+/// Idempotency is **project + slug** (issue #302) so nested write + Path B for
+/// the same article share one open review. When an open review already exists,
+/// it is **re-anchored** to the latest parent (artifact, not_before, title).
 pub fn spawn_content_outcome_review_for_slug(
     conn: &Connection,
     parent: &Task,
@@ -42,36 +46,20 @@ pub fn spawn_content_outcome_review_for_slug(
 
     let baseline = outcome_baseline_metrics(conn, &parent.project_id, slug);
     let anchor_date = chrono::Utc::now().to_rfc3339();
-
-    let target_artifact = crate::models::task::TaskArtifact {
-        key: "content_outcome_target".to_string(),
-        path: None,
-        artifact_type: Some("json".to_string()),
-        source: Some("post_actions".to_string()),
-        content: Some(
-            serde_json::json!({
-                "slug": slug,
-                "parent_task_type": parent.task_type,
-                "parent_task_id": parent.id,
-                "anchor_date": anchor_date,
-                "baseline": {
-                    "clicks": baseline.0,
-                    "impressions": baseline.1,
-                    "position": baseline.2,
-                    "source": baseline.3,
-                },
-            })
-            .to_string(),
-        ),
-    };
-
-    let idempotency_key = format!(
-        "content_outcome_review:{}:{}:{}",
-        parent.project_id, parent.id, slug
-    );
     let not_before = (chrono::Utc::now()
         + chrono::Duration::days(CONTENT_OUTCOME_REVIEW_DELAY_DAYS))
     .to_rfc3339();
+
+    let target_artifact = content_outcome_target_artifact(
+        slug,
+        parent,
+        &anchor_date,
+        baseline,
+    );
+
+    // Dedupe by project+slug (not parent) so write/write, write/path-b, and
+    // merge/fix-content for the same slug share one open review (#302).
+    let idempotency_key = format!("content_outcome_review:{}:{}", parent.project_id, slug);
     // Path B synthetic parents (path-b:… / path-b-merge:… / path-b-fix-content:…)
     // are not persisted — only depend when the parent row exists (same as
     // create_cluster_and_link_task).
@@ -92,14 +80,31 @@ pub fn spawn_content_outcome_review_for_slug(
         run_policy: Some(crate::models::task::TaskRunPolicy::UserEnqueue),
         agent_policy: crate::models::task::AgentPolicy::None,
         depends_on,
-        artifacts: vec![target_artifact],
+        artifacts: vec![target_artifact.clone()],
         idempotency_key: Some(idempotency_key),
-        not_before: Some(not_before),
+        not_before: Some(not_before.clone()),
         ..Default::default()
     };
 
     match crate::engine::spawner::TaskSpawner::spawn(conn, spec) {
         Ok(task) => {
+            // Always re-anchor: ReturnExisting keeps stale parent/not_before;
+            // brand-new tasks already match but refresh is idempotent (#302).
+            if let Err(e) = reanchor_content_outcome_review(
+                conn,
+                &task.id,
+                parent,
+                slug,
+                &target_artifact,
+                &not_before,
+            ) {
+                log::warn!(
+                    "[post_actions] Failed to re-anchor content_outcome_review {} for '{}': {}",
+                    task.id,
+                    slug,
+                    e
+                );
+            }
             log::info!(
                 "[post_actions] Spawned content_outcome_review {} for slug '{}' (parent {})",
                 task.id,
@@ -117,6 +122,67 @@ pub fn spawn_content_outcome_review_for_slug(
             None
         }
     }
+}
+
+fn content_outcome_target_artifact(
+    slug: &str,
+    parent: &Task,
+    anchor_date: &str,
+    baseline: (f64, f64, f64, &'static str),
+) -> crate::models::task::TaskArtifact {
+    crate::models::task::TaskArtifact {
+        key: "content_outcome_target".to_string(),
+        path: None,
+        artifact_type: Some("json".to_string()),
+        source: Some("post_actions".to_string()),
+        content: Some(
+            serde_json::json!({
+                "slug": slug,
+                "parent_task_type": parent.task_type,
+                "parent_task_id": parent.id,
+                "anchor_date": anchor_date,
+                "baseline": {
+                    "clicks": baseline.0,
+                    "impressions": baseline.1,
+                    "position": baseline.2,
+                    "source": baseline.3,
+                },
+            })
+            .to_string(),
+        ),
+    }
+}
+
+/// Refresh open review to the latest ship: artifact, not_before, title/description.
+fn reanchor_content_outcome_review(
+    conn: &Connection,
+    task_id: &str,
+    parent: &Task,
+    slug: &str,
+    target_artifact: &crate::models::task::TaskArtifact,
+    not_before: &str,
+) -> crate::error::Result<()> {
+    task_store::upsert_task_artifact(conn, task_id, target_artifact)?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE tasks SET not_before = ?1, updated_at = ?2 WHERE id = ?3",
+        rusqlite::params![not_before, now, task_id],
+    )?;
+
+    let title = format!("Content outcome review: {}", slug);
+    let description = format!(
+        "Compare GSC snapshot windows for '{}' {} days after {} (parent: {}).",
+        slug, CONTENT_OUTCOME_REVIEW_DELAY_DAYS, parent.task_type, parent.id
+    );
+    let _ = task_store::update_task(
+        conn,
+        task_id,
+        Some(&title),
+        Some(&description),
+        crate::models::task::Priority::Medium,
+    )?;
+    Ok(())
 }
 
 /// Resolve the article slug whose outcome should be reviewed.

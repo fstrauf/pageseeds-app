@@ -44,7 +44,8 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 
 | Tool | Notes |
 |------|--------|
-| `site-overview` | Site State overview |
+| `site-overview` | Site State overview (includes `outcomes` aggregates) |
+| `ctr-outcomes` | CTR closed-loop: deploy-verify + classify + report rollup (#302) |
 | `articles` | Article catalog + filters |
 | `article` | Per-slug package |
 | `article-list` | Lightweight article list |
@@ -81,8 +82,8 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 | `get-task` | Get one task |
 | `validate-article` | Validate article structure |
 
-**Free tool names (29):**  
-`list-projects`, `create-project`, `setup`, `site-overview`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `video-clip-context`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `strategy`, `project-config-status`, `migrate-project-config`, `list-tasks`, `get-task`, `validate-article`
+**Free tool names (31):**  
+`list-projects`, `create-project`, `setup`, `sync-site-urls`, `site-overview`, `ctr-outcomes`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `video-clip-context`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `strategy`, `project-config-status`, `migrate-project-config`, `list-tasks`, `get-task`, `validate-article`
 
 ---
 
