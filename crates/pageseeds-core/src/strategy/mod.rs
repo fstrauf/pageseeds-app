@@ -655,9 +655,65 @@ where
 
 // ─── Operator-facing summary (research-context) ──────────────────────────────
 
+/// Load-quality signal for operators (#276): empty / partial / ok.
+///
+/// Exposed on [`ContentStrategySummary`] so research-context JSON is loud when
+/// `project.md` strategy is missing or unusable as gate fuel. Does **not**
+/// hard-fail research; empty remains gate no-op.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StrategyLoadStatus {
+    #[default]
+    Empty,
+    Partial,
+    Ok,
+}
+
+impl StrategyLoadStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Partial => "partial",
+            Self::Ok => "ok",
+        }
+    }
+}
+
+/// Deterministic load-quality signal for operators (#276).
+///
+/// - `empty`: [`ProjectStrategy::is_empty`]
+/// - `partial`: not empty AND no usable gate fuel
+///   (primary empty AND no Active/Maintain/Legacy/Planned clusters AND
+///   do_not_expand empty)
+/// - `ok`: otherwise
+pub fn strategy_load_status(s: &ProjectStrategy) -> StrategyLoadStatus {
+    if s.is_empty() {
+        return StrategyLoadStatus::Empty;
+    }
+    let has_known_cluster = s.clusters.iter().any(|c| {
+        matches!(
+            c.status,
+            ClusterStatus::Active
+                | ClusterStatus::Maintain
+                | ClusterStatus::Legacy
+                | ClusterStatus::Planned
+        )
+    });
+    let has_gate_fuel = !s.primary_keywords.is_empty()
+        || has_known_cluster
+        || !s.do_not_expand.is_empty();
+    if has_gate_fuel {
+        StrategyLoadStatus::Ok
+    } else {
+        StrategyLoadStatus::Partial
+    }
+}
+
 /// Compact strategy view for `research-context` JSON (no full markdown dump).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContentStrategySummary {
+    /// Load-quality: `empty` | `partial` | `ok` (#276).
+    pub status: StrategyLoadStatus,
     pub primary_keywords: Vec<String>,
     pub problem_keywords: Vec<String>,
     pub audience_keywords: Vec<String>,
@@ -694,6 +750,7 @@ impl From<&ProjectStrategy> for ContentStrategySummary {
             }
         }
         Self {
+            status: strategy_load_status(s),
             primary_keywords: s.primary_keywords.clone(),
             problem_keywords: s.problem_keywords.clone(),
             audience_keywords: s.audience_keywords.clone(),
@@ -1026,11 +1083,60 @@ mod tests {
     fn content_strategy_summary_groups_clusters() {
         let s = parse_project_strategy(FIXTURE);
         let summary = ContentStrategySummary::from(&s);
+        assert_eq!(summary.status, StrategyLoadStatus::Ok);
         assert_eq!(summary.active_clusters.len(), 1);
         assert_eq!(summary.maintain_clusters.len(), 1);
         assert_eq!(summary.legacy_clusters.len(), 1);
         assert_eq!(summary.planned_clusters.len(), 1);
         assert_eq!(summary.do_not_expand.len(), 2);
+    }
+
+    #[test]
+    fn strategy_load_status_empty_partial_ok() {
+        // Empty → Empty
+        assert_eq!(
+            strategy_load_status(&ProjectStrategy::default()),
+            StrategyLoadStatus::Empty
+        );
+        assert_eq!(
+            ContentStrategySummary::from(&ProjectStrategy::default()).status,
+            StrategyLoadStatus::Empty
+        );
+
+        // FIXTURE → Ok
+        let fixture = parse_project_strategy(FIXTURE);
+        assert_eq!(strategy_load_status(&fixture), StrategyLoadStatus::Ok);
+        assert_eq!(
+            ContentStrategySummary::from(&fixture).status,
+            StrategyLoadStatus::Ok
+        );
+
+        // Partial: problem keywords + cluster heading without STATUS → Unknown only
+        // (no primary, no known clusters, no do_not_expand)
+        const PARTIAL_MD: &str = r#"
+## Search Keywords
+### Problem Keywords
+- thin content
+## Content Clusters
+### Cluster 1: Some Topic
+- foo
+"#;
+        let partial = parse_project_strategy(PARTIAL_MD);
+        assert!(!partial.is_empty(), "partial fixture must parse something");
+        assert!(partial.primary_keywords.is_empty());
+        assert!(!partial.problem_keywords.is_empty());
+        assert!(
+            partial
+                .clusters
+                .iter()
+                .all(|c| c.status == ClusterStatus::Unknown),
+            "cluster without STATUS token must be Unknown"
+        );
+        assert_eq!(strategy_load_status(&partial), StrategyLoadStatus::Partial);
+        assert_eq!(
+            ContentStrategySummary::from(&partial).status,
+            StrategyLoadStatus::Partial
+        );
     }
 
     #[test]

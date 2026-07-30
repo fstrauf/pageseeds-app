@@ -26,7 +26,7 @@ use crate::engine::spawner::{DeduplicationPolicy, TaskSpec, TaskSpawner};
 use crate::engine::task_store;
 use crate::models::research::FilterFunnel;
 use crate::models::task::{AgentPolicy, Priority, Task, TaskStatus};
-use crate::strategy::ContentStrategySummary;
+use crate::strategy::{ContentStrategySummary, StrategyLoadStatus};
 
 // Re-export refresh / re-annotate surface so callers can use `research_package::*` paths.
 pub use crate::engine::research_shortlist_refresh::{
@@ -143,12 +143,31 @@ fn pending_shortlist_has_active(shortlist: &[ShortlistSummaryEntry]) -> bool {
     })
 }
 
+/// Recovery guidance when strategy is empty/partial (#276).
+///
+/// Prepended as `guidance[0]` so operators and weekly agents see that hard
+/// gates / ACTIVE boosts are silent no-ops — research still succeeds.
+fn strategy_status_recovery_guidance(status: StrategyLoadStatus) -> String {
+    format!(
+        "content_strategy.status is {} — hard gates and ACTIVE boosts are no-ops until project.md matches the Search Keywords + Content Clusters (STATUS) contract (see strategy module docs / pageseeds-cli strategy). Fix before trusting research-pull selection.",
+        status.as_str()
+    )
+}
+
 /// Build static + optional dynamic guidance for a research strategy package.
 fn build_strategy_guidance(
     content_strategy: &ContentStrategySummary,
     shortlist: &[ShortlistSummaryEntry],
 ) -> Vec<String> {
-    let mut guidance: Vec<String> = STRATEGY_GUIDANCE.iter().map(|s| (*s).to_string()).collect();
+    let mut guidance: Vec<String> = Vec::new();
+    // #276: loud recovery first when strategy is empty or partial.
+    if matches!(
+        content_strategy.status,
+        StrategyLoadStatus::Empty | StrategyLoadStatus::Partial
+    ) {
+        guidance.push(strategy_status_recovery_guidance(content_strategy.status));
+    }
+    guidance.extend(STRATEGY_GUIDANCE.iter().map(|s| (*s).to_string()));
     if strategy_has_primary_or_active(content_strategy) {
         let pending_empty = !shortlist.iter().any(|e| e.status == "pending");
         if pending_empty || !pending_shortlist_has_active(shortlist) {
@@ -739,6 +758,14 @@ mod tests {
         // No project.md → empty strategy → strategy fields absent (serde skip).
         assert!(pkg.shortlist.iter().all(|e| e.strategy_cluster.is_none()));
         assert!(pkg.shortlist.iter().all(|e| e.strategy_status.is_none()));
+        // #276: empty strategy is loud in JSON + guidance leads with recovery.
+        assert_eq!(pkg.content_strategy.status, StrategyLoadStatus::Empty);
+        assert!(
+            pkg.guidance[0].contains("content_strategy.status is empty")
+                && pkg.guidance[0].contains("no-ops"),
+            "guidance[0] must lead with empty-status recovery; got {:?}",
+            pkg.guidance[0]
+        );
         // Empty strategy → no dynamic adjacent-shortlist line (#275).
         assert!(
             !pkg.guidance
@@ -747,6 +774,96 @@ mod tests {
                     || g.contains("adjacent-only")),
             "dynamic adjacent guidance must not appear when strategy is empty"
         );
+    }
+
+    #[test]
+    fn strategy_package_status_ok_fixture_no_recovery_first() {
+        let (conn, dir) = strategy_fixture_db(
+            r#"# Example Project
+
+## Search Keywords
+
+### Primary Keywords
+- seo tools
+- keyword research
+
+### Problem Keywords
+- thin content
+
+### Audience Keywords
+- content marketers
+
+### Legacy Service Keywords (do not expand)
+- custom web design
+- wordpress agency
+
+## Content Clusters And Priorities
+
+### Cluster 1: SEO Fundamentals (ACTIVE)
+- on-page seo
+- technical seo
+
+### Cluster 2: Alternatives (MAINTAIN)
+- competitor alternatives
+
+### Cluster 3: Services (LEGACY)
+- web design packages
+
+### Cluster 4: New Pillar (PLANNED)
+- ai content ops
+"#,
+        );
+
+        let pkg = build_research_strategy_package(&conn, "proj1").unwrap();
+        assert_eq!(pkg.content_strategy.status, StrategyLoadStatus::Ok);
+        assert_eq!(pkg.content_strategy.primary_keywords.len(), 2);
+        assert_eq!(pkg.content_strategy.active_clusters.len(), 1);
+        assert_eq!(pkg.content_strategy.do_not_expand.len(), 2);
+        // Recovery line must not be first (or present as status recovery for ok).
+        assert!(
+            !pkg.guidance[0].contains("content_strategy.status is empty")
+                && !pkg.guidance[0].contains("content_strategy.status is partial"),
+            "ok strategy must not lead with status recovery; guidance[0]={:?}",
+            pkg.guidance[0]
+        );
+        assert!(
+            !pkg.guidance
+                .iter()
+                .any(|g| g.starts_with("content_strategy.status is empty")
+                    || g.starts_with("content_strategy.status is partial")),
+            "ok strategy must not include empty/partial recovery guidance"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn strategy_package_status_partial_recovery_first() {
+        // Problem keywords + Unknown cluster only → partial (no gate fuel).
+        let (conn, dir) = strategy_fixture_db(
+            r#"
+## Search Keywords
+### Problem Keywords
+- thin content
+## Content Clusters
+### Cluster 1: Some Topic
+- foo
+"#,
+        );
+
+        let pkg = build_research_strategy_package(&conn, "proj1").unwrap();
+        assert_eq!(pkg.content_strategy.status, StrategyLoadStatus::Partial);
+        assert!(!pkg.content_strategy.problem_keywords.is_empty());
+        assert!(pkg.content_strategy.primary_keywords.is_empty());
+        assert!(pkg.content_strategy.active_clusters.is_empty());
+        assert!(
+            pkg.guidance[0].contains("content_strategy.status is partial")
+                && pkg.guidance[0].contains("no-ops"),
+            "guidance[0] must lead with partial-status recovery; got {:?}",
+            pkg.guidance[0]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
