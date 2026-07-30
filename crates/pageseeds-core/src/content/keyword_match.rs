@@ -180,6 +180,36 @@ pub fn is_quoted_zero_click_bot_noise(raw_query: &str, total_clicks: f64) -> boo
     trimmed.len() >= 3 && trimmed.starts_with('"') && trimmed.ends_with('"')
 }
 
+/// Derive brand tokens from the project name and id for backfill / demand
+/// filtering (issue #74, review iteration 1; relocated from GSC exec #309).
+///
+/// Brand tokens exist to reject branded/navigational GSC queries — a query
+/// naming the project is not a targetable keyword. The token set must stay
+/// tight: project ids/names are slugs like `expense` or `pageseeds-app`, so
+/// generic tokens (`app`, `io`, `hq`, `site`, `my`, `co`) would otherwise
+/// become "brand" tokens and silently reject legitimate non-branded queries
+/// (e.g. `budget app template` for a project named `…-app`). Contract: only
+/// alphanumeric tokens of length >= 3, minus a small generic-word list, are
+/// treated as brand signals.
+pub fn derive_brand_tokens(project_name: &str, project_id: &str) -> Vec<String> {
+    /// Words too generic to identify a brand — common slug suffixes and
+    /// TLD fragments that appear in ordinary non-branded queries.
+    const GENERIC_WORDS: &[&str] = &[
+        "app", "io", "hq", "site", "my", "co", "web", "www", "com", "net", "org", "dev",
+    ];
+    let mut tokens: Vec<String> = Vec::new();
+    for token in format!("{} {}", project_name, project_id)
+        .split(|c: char| !c.is_alphanumeric())
+        .map(|t| t.to_lowercase())
+    {
+        if token.len() >= 3 && !GENERIC_WORDS.contains(&token.as_str()) && !tokens.contains(&token)
+        {
+            tokens.push(token);
+        }
+    }
+    tokens
+}
+
 /// Maximum content words kept from a backfilled GSC query. Longer phrases
 /// can never appear in a 55-char title, so fix-pipeline keyword validation
 /// would be unsatisfiable (issue #74).
@@ -445,5 +475,41 @@ mod tests {
         assert!(!is_quoted_zero_click_bot_noise("\"only open", 0.0));
         assert!(!is_quoted_zero_click_bot_noise("only close\"", 0.0));
         assert!(!is_quoted_zero_click_bot_noise("", 0.0));
+    }
+
+    #[test]
+    fn derive_brand_tokens_drops_generic_slug_tokens() {
+        // Generic tokens from a slug-style id must not become brand tokens
+        // (review iteration 1: `app`, `io`, `my`, `co` etc. silently rejected
+        // legitimate non-branded queries before this fix).
+        let tokens = derive_brand_tokens("My App", "my-app");
+        assert_eq!(tokens, Vec::<String>::new());
+        let tokens = derive_brand_tokens("PageSeeds App", "pageseeds-app");
+        assert_eq!(tokens, vec!["pageseeds".to_string()]);
+        // Short tokens (< 3 chars) are dropped too.
+        let tokens = derive_brand_tokens("Acme IO HQ", "acme-io");
+        assert_eq!(tokens, vec!["acme".to_string()]);
+    }
+
+    #[test]
+    fn backfill_generic_token_project_name_does_not_reject_legit_queries() {
+        // End-to-end contract: for a project named `my-app`, the query
+        // `budget app template` must survive backfill normalization, while a
+        // genuinely branded query is still rejected.
+        let brand = derive_brand_tokens("My App", "my-app");
+        assert_eq!(
+            normalize_backfilled_keyword("budget app template", &brand),
+            Some("budget app template".to_string())
+        );
+
+        let brand = derive_brand_tokens("PageSeeds App", "pageseeds-app");
+        assert_eq!(
+            normalize_backfilled_keyword("budget app template", &brand),
+            Some("budget app template".to_string())
+        );
+        assert_eq!(
+            normalize_backfilled_keyword("pageseeds app", &brand),
+            None
+        );
     }
 }

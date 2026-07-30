@@ -196,6 +196,237 @@ pub fn reannotate_shortlist_strategy(
     Ok(updated)
 }
 
+// ─── Shared inject scaffolding (strategy + gsc_uncovered; review #309) ───────
+
+/// Article `target_keyword` coverage + pending|researched|covered shortlist
+/// themes (normalized). Shared by strategy and gsc_uncovered injects.
+fn shortlist_inject_coverage(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<(std::collections::HashSet<String>, std::collections::HashSet<String>), String> {
+    use std::collections::HashSet;
+
+    use crate::content::keyword_match::normalize_keyword;
+
+    let articles = crate::engine::task_store::list_articles(conn, project_id)
+        .map_err(|e| e.to_string())?;
+    let covered_keywords: HashSet<String> = articles
+        .iter()
+        .filter_map(|a| a.target_keyword.as_deref())
+        .map(normalize_keyword)
+        .filter(|k| !k.is_empty())
+        .collect();
+
+    let entries = research_shortlist::list_entries(conn, project_id, None)
+        .map_err(|e| e.to_string())?;
+    let existing_themes: HashSet<String> = entries
+        .iter()
+        .filter(|e| matches!(e.status.as_str(), "pending" | "researched" | "covered"))
+        .map(|e| normalize_keyword(&e.theme))
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    Ok((covered_keywords, existing_themes))
+}
+
+/// Normalized Primary + ACTIVE cluster keyword phrases from strategy.
+fn strategy_primary_active_norms(
+    strategy: &crate::strategy::ProjectStrategy,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+
+    use crate::content::keyword_match::normalize_keyword;
+    use crate::strategy::ClusterStatus;
+
+    let mut norms: HashSet<String> = HashSet::new();
+    for phrase in &strategy.primary_keywords {
+        let norm = normalize_keyword(phrase);
+        if !norm.is_empty() {
+            norms.insert(norm);
+        }
+    }
+    for cluster in &strategy.clusters {
+        if cluster.status != ClusterStatus::Active {
+            continue;
+        }
+        for phrase in &cluster.keywords {
+            let norm = normalize_keyword(phrase);
+            if !norm.is_empty() {
+                norms.insert(norm);
+            }
+        }
+    }
+    norms
+}
+
+/// Annotate with `match_cluster`, upsert, log, and track theme on success.
+/// Returns `true` when the upsert succeeded.
+fn upsert_inject_entry(
+    conn: &Connection,
+    project_id: &str,
+    theme: &str,
+    seeds: Vec<String>,
+    source: &str,
+    priority: &str,
+    article_count: Option<i64>,
+    total_impressions: Option<f64>,
+    strategy: &crate::strategy::ProjectStrategy,
+    existing_themes: &mut std::collections::HashSet<String>,
+    log_label: &str,
+) -> bool {
+    use crate::content::keyword_match::normalize_keyword;
+    use crate::db::research_shortlist::ResearchShortlistEntry;
+    use crate::strategy::match_cluster;
+
+    let mut entry = ResearchShortlistEntry::new(
+        project_id,
+        theme,
+        seeds,
+        source,
+        priority,
+        article_count,
+        total_impressions,
+    );
+    // health_status remains "unproven" from new() — do not invent strategy_gap.
+    if let Some((cluster, status)) = match_cluster(strategy, theme) {
+        entry.strategy_cluster = Some(cluster.to_string());
+        entry.strategy_status = Some(status.as_str().to_string());
+    }
+
+    let norm = normalize_keyword(theme);
+    match research_shortlist::upsert_entry(conn, &entry) {
+        Ok(_) => {
+            if !norm.is_empty() {
+                existing_themes.insert(norm);
+            }
+            match total_impressions {
+                Some(imp) if source == "gsc_uncovered" => {
+                    log::info!(
+                        "[research_shortlist_refresh] {} inject theme='{}' impressions={} project={}",
+                        log_label,
+                        theme,
+                        imp,
+                        project_id
+                    );
+                }
+                _ => {
+                    log::info!(
+                        "[research_shortlist_refresh] {} inject source={} theme='{}' project={}",
+                        log_label,
+                        source,
+                        theme,
+                        project_id
+                    );
+                }
+            }
+            true
+        }
+        Err(e) => {
+            log::warn!(
+                "[research_shortlist_refresh] {} upsert failed theme='{}': {}",
+                log_label,
+                theme,
+                e
+            );
+            false
+        }
+    }
+}
+
+/// Pure GSC uncovered-demand candidate selection (filter policy only; no DB writes).
+///
+/// Returns `(theme, impressions)` sorted by impressions desc, capped at
+/// [`MAX_GSC_UNCOVERED_INJECTS`]. Exact-normalize match only.
+fn select_gsc_uncovered_candidates(
+    demand_rows: &[crate::db::QueryDemandRow],
+    brand_tokens: &[String],
+    strategy: &crate::strategy::ProjectStrategy,
+    covered_keywords: &std::collections::HashSet<String>,
+    existing_themes: &std::collections::HashSet<String>,
+) -> Vec<(String, f64)> {
+    use std::collections::HashMap;
+
+    use crate::content::keyword_match::{
+        is_quoted_zero_click_bot_noise, normalize_backfilled_keyword, normalize_keyword,
+    };
+    use crate::strategy::strategy_blocks_expansion;
+
+    let strategy_covered = strategy_primary_active_norms(strategy);
+
+    // Dedupe by theme norm, keeping the highest-impressions row when backfill
+    // collapses variants.
+    let mut best_by_theme: HashMap<String, (String, f64)> = HashMap::new();
+
+    for row in demand_rows {
+        if row.impressions < MIN_UNCOVERED_QUERY_IMPRESSIONS {
+            continue;
+        }
+        if is_quoted_zero_click_bot_noise(&row.query, row.clicks) {
+            log::debug!(
+                "[research_shortlist_refresh] gsc_uncovered skip query='{}' (quoted zero-click bot noise)",
+                row.query
+            );
+            continue;
+        }
+
+        let Some(theme) = normalize_backfilled_keyword(&row.query, brand_tokens) else {
+            log::debug!(
+                "[research_shortlist_refresh] gsc_uncovered skip query='{}' (brand/junk)",
+                row.query
+            );
+            continue;
+        };
+
+        let norm = normalize_keyword(&theme);
+        if norm.is_empty() {
+            continue;
+        }
+
+        if strategy_covered.contains(&norm) {
+            log::debug!(
+                "[research_shortlist_refresh] gsc_uncovered skip theme='{}' (strategy primary/ACTIVE)",
+                theme
+            );
+            continue;
+        }
+        if strategy_blocks_expansion(&theme, strategy) {
+            log::info!(
+                "[research_shortlist_refresh] gsc_uncovered skip theme='{}' (do_not_expand/LEGACY)",
+                theme
+            );
+            continue;
+        }
+        if covered_keywords.contains(&norm) {
+            log::debug!(
+                "[research_shortlist_refresh] gsc_uncovered skip theme='{}' (covered by article target_keyword)",
+                theme
+            );
+            continue;
+        }
+        if existing_themes.contains(&norm) {
+            log::debug!(
+                "[research_shortlist_refresh] gsc_uncovered skip theme='{}' (theme already on shortlist)",
+                theme
+            );
+            continue;
+        }
+
+        best_by_theme
+            .entry(norm)
+            .and_modify(|(_, imp)| {
+                if row.impressions > *imp {
+                    *imp = row.impressions;
+                }
+            })
+            .or_insert((theme, row.impressions));
+    }
+
+    let mut candidates: Vec<(String, f64)> = best_by_theme.into_values().collect();
+    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.truncate(MAX_GSC_UNCOVERED_INJECTS);
+    candidates
+}
+
 /// Inject operator-declared Primary + ACTIVE strategy keyword bullets as pending
 /// shortlist fuel so Path B can expand product-gap terms with 0 GSC impressions
 /// (issue #274). Breaks the GSC self-loop where territory only surfaces themes
@@ -219,8 +450,7 @@ pub fn inject_strategy_shortlist_seeds(
     use std::collections::HashSet;
 
     use crate::content::keyword_match::normalize_keyword;
-    use crate::db::research_shortlist::ResearchShortlistEntry;
-    use crate::strategy::{match_cluster, strategy_blocks_expansion, ClusterStatus};
+    use crate::strategy::{strategy_blocks_expansion, ClusterStatus};
 
     if project_id.trim().is_empty() {
         return Ok(0);
@@ -264,25 +494,7 @@ pub fn inject_strategy_shortlist_seeds(
         }
     }
 
-    // Covered by published/catalog articles (same normalizer as mark_covered).
-    let articles = crate::engine::task_store::list_articles(conn, project_id)
-        .map_err(|e| e.to_string())?;
-    let covered_keywords: HashSet<String> = articles
-        .iter()
-        .filter_map(|a| a.target_keyword.as_deref())
-        .map(normalize_keyword)
-        .filter(|k| !k.is_empty())
-        .collect();
-
-    // Themes already fuel or done — any source, pending|researched|covered.
-    let entries = research_shortlist::list_entries(conn, project_id, None)
-        .map_err(|e| e.to_string())?;
-    let mut existing_themes: HashSet<String> = entries
-        .iter()
-        .filter(|e| matches!(e.status.as_str(), "pending" | "researched" | "covered"))
-        .map(|e| normalize_keyword(&e.theme))
-        .filter(|t| !t.is_empty())
-        .collect();
+    let (covered_keywords, mut existing_themes) = shortlist_inject_coverage(conn, project_id)?;
 
     let mut injected = 0usize;
     for (phrase, source, priority) in candidates {
@@ -319,7 +531,8 @@ pub fn inject_strategy_shortlist_seeds(
             continue;
         }
 
-        let mut entry = ResearchShortlistEntry::new(
+        if upsert_inject_entry(
+            conn,
             project_id,
             &phrase,
             vec![phrase.clone()],
@@ -327,31 +540,11 @@ pub fn inject_strategy_shortlist_seeds(
             priority,
             Some(0),
             Some(0.0),
-        );
-        // health_status remains "unproven" from new() — do not invent strategy_gap.
-        if let Some((cluster, status)) = match_cluster(&strategy, &phrase) {
-            entry.strategy_cluster = Some(cluster.to_string());
-            entry.strategy_status = Some(status.as_str().to_string());
-        }
-
-        match research_shortlist::upsert_entry(conn, &entry) {
-            Ok(_) => {
-                injected += 1;
-                existing_themes.insert(norm);
-                log::info!(
-                    "[research_shortlist_refresh] strategy inject source={} theme='{}' project={}",
-                    source,
-                    phrase,
-                    project_id
-                );
-            }
-            Err(e) => {
-                log::warn!(
-                    "[research_shortlist_refresh] strategy inject upsert failed theme='{}': {}",
-                    phrase,
-                    e
-                );
-            }
+            &strategy,
+            &mut existing_themes,
+            "strategy",
+        ) {
+            injected += 1;
         }
     }
 
@@ -389,14 +582,7 @@ pub fn inject_gsc_uncovered_seeds(
     conn: &Connection,
     project_id: &str,
 ) -> Result<usize, String> {
-    use std::collections::HashSet;
-
-    use crate::content::keyword_match::{
-        is_quoted_zero_click_bot_noise, normalize_backfilled_keyword, normalize_keyword,
-    };
-    use crate::db::research_shortlist::ResearchShortlistEntry;
-    use crate::engine::exec::gsc::derive_brand_tokens;
-    use crate::strategy::{match_cluster, strategy_blocks_expansion, ClusterStatus};
+    use crate::content::keyword_match::derive_brand_tokens;
 
     if project_id.trim().is_empty() {
         return Ok(0);
@@ -414,124 +600,20 @@ pub fn inject_gsc_uncovered_seeds(
     };
 
     let strategy = crate::strategy::load_for_project(conn, project_id);
+    let (covered_keywords, mut existing_themes) = shortlist_inject_coverage(conn, project_id)?;
 
-    // Strategy primary + ACTIVE cluster keywords (exact normalize_keyword match).
-    let mut strategy_covered: HashSet<String> = HashSet::new();
-    for phrase in &strategy.primary_keywords {
-        let norm = normalize_keyword(phrase);
-        if !norm.is_empty() {
-            strategy_covered.insert(norm);
-        }
-    }
-    for cluster in &strategy.clusters {
-        if cluster.status != ClusterStatus::Active {
-            continue;
-        }
-        for phrase in &cluster.keywords {
-            let norm = normalize_keyword(phrase);
-            if !norm.is_empty() {
-                strategy_covered.insert(norm);
-            }
-        }
-    }
-
-    // Covered by published/catalog articles (same normalizer as strategy inject).
-    let articles = crate::engine::task_store::list_articles(conn, project_id)
-        .map_err(|e| e.to_string())?;
-    let covered_keywords: HashSet<String> = articles
-        .iter()
-        .filter_map(|a| a.target_keyword.as_deref())
-        .map(normalize_keyword)
-        .filter(|k| !k.is_empty())
-        .collect();
-
-    // Themes already fuel or done — any source, pending|researched|covered.
-    let entries = research_shortlist::list_entries(conn, project_id, None)
-        .map_err(|e| e.to_string())?;
-    let mut existing_themes: HashSet<String> = entries
-        .iter()
-        .filter(|e| matches!(e.status.as_str(), "pending" | "researched" | "covered"))
-        .map(|e| normalize_keyword(&e.theme))
-        .filter(|t| !t.is_empty())
-        .collect();
-
-    // Filter + collect survivors: (theme, impressions). Dedupe by theme norm,
-    // keeping the highest-impressions row when backfill collapses variants.
-    let mut best_by_theme: std::collections::HashMap<String, (String, f64)> =
-        std::collections::HashMap::new();
-
-    for row in &demand {
-        if row.impressions < MIN_UNCOVERED_QUERY_IMPRESSIONS {
-            continue;
-        }
-        if is_quoted_zero_click_bot_noise(&row.query, row.clicks) {
-            log::debug!(
-                "[research_shortlist_refresh] gsc_uncovered skip query='{}' (quoted zero-click bot noise)",
-                row.query
-            );
-            continue;
-        }
-
-        let Some(theme) = normalize_backfilled_keyword(&row.query, &brand_tokens) else {
-            log::debug!(
-                "[research_shortlist_refresh] gsc_uncovered skip query='{}' (brand/junk)",
-                row.query
-            );
-            continue;
-        };
-
-        let norm = normalize_keyword(&theme);
-        if norm.is_empty() {
-            continue;
-        }
-
-        if strategy_covered.contains(&norm) {
-            log::debug!(
-                "[research_shortlist_refresh] gsc_uncovered skip theme='{}' (strategy primary/ACTIVE)",
-                theme
-            );
-            continue;
-        }
-        if strategy_blocks_expansion(&theme, &strategy) {
-            log::info!(
-                "[research_shortlist_refresh] gsc_uncovered skip theme='{}' (do_not_expand/LEGACY)",
-                theme
-            );
-            continue;
-        }
-        if covered_keywords.contains(&norm) {
-            log::debug!(
-                "[research_shortlist_refresh] gsc_uncovered skip theme='{}' (covered by article target_keyword)",
-                theme
-            );
-            continue;
-        }
-        if existing_themes.contains(&norm) {
-            log::debug!(
-                "[research_shortlist_refresh] gsc_uncovered skip theme='{}' (theme already on shortlist)",
-                theme
-            );
-            continue;
-        }
-
-        best_by_theme
-            .entry(norm)
-            .and_modify(|(_, imp)| {
-                if row.impressions > *imp {
-                    *imp = row.impressions;
-                }
-            })
-            .or_insert((theme, row.impressions));
-    }
-
-    let mut candidates: Vec<(String, f64)> = best_by_theme.into_values().collect();
-    // Sort by impressions desc, take top cap.
-    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    candidates.truncate(MAX_GSC_UNCOVERED_INJECTS);
+    let candidates = select_gsc_uncovered_candidates(
+        &demand,
+        &brand_tokens,
+        &strategy,
+        &covered_keywords,
+        &existing_themes,
+    );
 
     let mut injected = 0usize;
     for (theme, impressions) in candidates {
-        let mut entry = ResearchShortlistEntry::new(
+        if upsert_inject_entry(
+            conn,
             project_id,
             &theme,
             vec![theme.clone()],
@@ -539,31 +621,11 @@ pub fn inject_gsc_uncovered_seeds(
             "medium",
             Some(0),
             Some(impressions),
-        );
-        if let Some((cluster, status)) = match_cluster(&strategy, &theme) {
-            entry.strategy_cluster = Some(cluster.to_string());
-            entry.strategy_status = Some(status.as_str().to_string());
-        }
-
-        let norm = normalize_keyword(&theme);
-        match research_shortlist::upsert_entry(conn, &entry) {
-            Ok(_) => {
-                injected += 1;
-                existing_themes.insert(norm);
-                log::info!(
-                    "[research_shortlist_refresh] gsc_uncovered inject theme='{}' impressions={} project={}",
-                    theme,
-                    impressions,
-                    project_id
-                );
-            }
-            Err(e) => {
-                log::warn!(
-                    "[research_shortlist_refresh] gsc_uncovered upsert failed theme='{}': {}",
-                    theme,
-                    e
-                );
-            }
+            &strategy,
+            &mut existing_themes,
+            "gsc_uncovered",
+        ) {
+            injected += 1;
         }
     }
 
