@@ -23,9 +23,25 @@ metadata:
 > already has `video.config.json`. Policy lives here; craft lives in the
 > embedded `video-script` skill; capability is `pageseeds-cli`.
 
-**Canonical path:** edit only `.agents/skills/video-clip/SKILL.md`.  
-`.grok/skills/video-clip/SKILL.md` is a **symlink** for Grok discovery — do not
-edit the symlink target path as a second copy.
+**Canonical path:** edit only
+`pageseeds-app/.agents/skills/video-clip/SKILL.md`.
+
+**Discovery (do not edit as second copies):**
+
+| Location | Role |
+|----------|------|
+| `pageseeds-app/.grok/skills/video-clip/SKILL.md` | Repo Grok discovery symlink |
+| `~/.grok/skills/video-clip/SKILL.md` | User Grok — available in **all** repos (e.g. coffee / nz-coffee-hub) |
+| `~/.kimi-code/skills/video-clip/SKILL.md` | User Kimi — available in **all** repos |
+
+All three point at the canonical `.agents` file. Re-create if missing:
+
+```bash
+CANON="$HOME/01_code/pageseeds-app/.agents/skills/video-clip/SKILL.md"
+mkdir -p ~/.grok/skills/video-clip ~/.kimi-code/skills/video-clip
+ln -sfn "$CANON" ~/.grok/skills/video-clip/SKILL.md
+ln -sfn "$CANON" ~/.kimi-code/skills/video-clip/SKILL.md
+```
 
 ## Invocation
 

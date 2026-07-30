@@ -93,7 +93,15 @@ Weekly SEO and video clips are **agent skills**, not in-repo schedulers:
 | Weekly SEO status | `.agents/skills/weekly-seo-status/SKILL.md` |
 | Video clip | `.agents/skills/video-clip/SKILL.md` |
 
-`.grok/skills/*` entries are discovery symlinks — edit only the `.agents` files. Do not build a Rust weekly orchestrator or cross-project runner for these.
+Discovery symlinks (edit only the `.agents` files):
+
+| Scope | Path | When it loads |
+|-------|------|---------------|
+| Repo | `pageseeds-app/.grok/skills/<name>/` | Sessions inside pageseeds-app |
+| User Grok | `~/.grok/skills/<name>/` | **All repos** (coffee, nz-coffee-hub, …) |
+| User Kimi | `~/.kimi-code/skills/<name>/` | **All repos** |
+
+Do not build a Rust weekly orchestrator or cross-project runner for these.
 
 App-default **prompt** skills for task execution live under `crates/pageseeds-core/skills/` (registered in `engine/skills.rs`). Project `.github/skills/` overrides still work; drift is warned when versions differ.
 

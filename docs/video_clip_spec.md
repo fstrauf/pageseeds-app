@@ -257,8 +257,11 @@ part of the contract.
 
 **Source of truth for article → clip JSON → render → quality gate:**  
 [`.agents/skills/video-clip/SKILL.md`](../.agents/skills/video-clip/SKILL.md)
-(`/video-clip`). Grok discovery: `.grok/skills/video-clip/SKILL.md` is a symlink
-to that file — edit only the `.agents` path.
+(`/video-clip`). Discovery symlinks (edit only the `.agents` path):
+
+- Repo Grok: `.grok/skills/video-clip/SKILL.md`
+- User Grok (all repos): `~/.grok/skills/video-clip/SKILL.md`
+- User Kimi (all repos): `~/.kimi-code/skills/video-clip/SKILL.md`
 
 Sequence:
 
