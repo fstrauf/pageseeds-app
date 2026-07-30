@@ -288,6 +288,7 @@ under soft path A.
 | `create-task content_outcome_review` / may-create addition | System spawn only; execute **due** rows (see soft path A) |
 | `ctr_outcome_review` as weekly action backlog (#152) | Cancel / ignore; desk re-read for CTR closed-loop |
 | Video clips as weekly spine / may-create / multi-clip batch (#222) | Elective via `/video-clip` only — see [Optional post-publish video](#optional-post-publish-video-elective) |
+| Territory / top-shortlist-by-impressions as default **new-article** seeds when Primary or ACTIVE exist (#275) | Research week: `research-pull -K` from `content_strategy` Primary + ACTIVE first; shortlist/desk only if strategy empty or Primary/ACTIVE exhausted |
 
 ## Soft guidance (default path)
 
@@ -551,17 +552,30 @@ Always prefer `filterTestAccounts` / project defaults that exclude internal user
 - Burning exploration budget on replay deep-dives
 
 
-### Research strategy package (#141 / #255)
+### Research strategy package (#141 / #255 / #275)
 
 Session owns themes/seeds; CLI owns Ahrefs pull:
 
 ```bash
-# Optional: session proposes seeds from desk + research-shortlist
+# Research week: seeds from content_strategy Primary/ACTIVE first (not territory heads)
 pageseeds-cli research-pull -i <id> -p <path> --seeds "theme one,theme two" ...
 # → candidates for select-keywords / write Path B
 ```
 
 Prefer this over relying solely on nested research_seed_extraction when tools exist.
+
+**Week mode (soft prior for *what* to do; hard for *seed source* when researching):**
+
+| Week mode | When | Seed / action rule |
+|-----------|------|-------------------|
+| **CTR / fix week** | High-impr low-CTR waste, striking-distance, hard cannibal, indexing | Prefer Path B fix / targeted creates — **unchanged**. Territory shortlist + desk are judgment aids for **existing** pages. |
+| **Research week** | Choosing to create ≤3 **new** articles (gap growth) | `research-pull -K` seeds **must** come from `content_strategy.primary_keywords` + **ACTIVE** cluster keywords first (intentional **PLANNED** pillar OK). Territory / shortlist pending seeds only if strategy empty **or** Primary/ACTIVE exhausted/covered. |
+
+**Explicit ban:** Do **not** treat “top shortlist by impressions / promising” as default new-article seeds when Primary or ACTIVE keywords exist in the package.
+
+**Empty strategy:** degrade — seed from shortlist/desk; state “strategy empty/unparseable” in report (pair with #276 when shipped). Do not invent Primary.
+
+**Deviation honesty:** If operator/session still used territory-only seeds while Primary gaps existed, note under Skipped / Decisions — do not pretend Primary-first ran.
 
 **Research:** generative. Prefer `research-context` (auto-refreshes shortlist
 when empty/stale via territory) then health (`promising` / `depleted` /
@@ -571,18 +585,24 @@ when empty/stale via territory) then health (`promising` / `depleted` /
   territory rows older than 7d → territory analysis). Read
   `shortlist_refreshed` / `shortlist_refresh_reason` and territory
   `skip_reasons` when still empty after refresh — not “mystery empty.”
-- **Content strategy (`content_strategy` in research-context JSON, #255):**
-  Prefer structured strategy from `research-context` when present (primary
-  keywords, ACTIVE/MAINTAIN/LEGACY/PLANNED clusters, `do_not_expand`). If
-  missing/empty, read `<project-path>/.github/automation/project.md` Search
-  Keywords + Content Clusters sections yourself.
-- **Seeds only from Primary / ACTIVE** (and intentional PLANNED when expanding
-  a planned pillar). Never seed `do_not_expand` phrases or LEGACY clusters.
-  Deprioritize MAINTAIN vs ACTIVE/primary.
-- **After pull (belt after Rust gate):** reject / do **not** `select-keywords`
-  for LEGACY / do-not-expand candidates even if API ranked them high.
-  Final selection also hard-drops those in-core (`strategy_rejected` in the
+  Read `content_strategy` + `guidance` from the package before proposing seeds.
+- **Content strategy (`content_strategy` in research-context JSON, #255 / #275):**
+  On **research weeks**, seed order is **Primary / ACTIVE first** (intentional
+  PLANNED when expanding a planned pillar). Territory shortlist and desk are
+  **fallback only** when strategy is empty/unparseable **or** Primary/ACTIVE
+  themes are exhausted/covered — not equal peers. If strategy missing/empty,
+  read `<project-path>/.github/automation/project.md` Search Keywords + Content
+  Clusters yourself; if still empty, degrade to shortlist/desk and say so.
+- **Never seed `do_not_expand` / LEGACY** (and deprioritize MAINTAIN vs
+  ACTIVE/primary). After pull, reject those candidates before select-keywords.
+  Final selection also hard-drops them in-core (`strategy_rejected` in the
   picker artifact / step message).
+- **Shortlist health** (`promising` / pending) ranks **fallback** themes and
+  prioritizes re-research of uncovered strategy gaps — **not** the default
+  new-article seed list when Primary/ACTIVE exist.
+- **After pull:** prefer 1–2 picks when thin inventory; max **3** rail unchanged.
+  Reject / do **not** `select-keywords` for LEGACY / do-not-expand candidates
+  even if API ranked them high.
 - **Manual fallback only:** If `research-context` fails or you need a force
   re-fill, create+execute `update_research_shortlist`. Do **not** treat empty
   shortlist after Path B pull alone as proof there are no research gaps.
@@ -590,8 +610,8 @@ when empty/stale via territory) then health (`promising` / `depleted` /
   last research date.
 
 Avoid-heavy keyword pickers (AIO-blocked heads, mostly `winnability: avoid`):
-prefer shortlist **promising** themes/seeds and re-run research; pick only
-`differentiate` / `target` rows when possible. Residual avoids = last resort.
+prefer shortlist **promising** themes/seeds **as fallback** and re-run research;
+pick only `differentiate` / `target` rows when possible. Residual avoids = last resort.
 
 #### Known limits (branch, don’t dead-end)
 

@@ -107,15 +107,56 @@ pub struct ResearchStrategyPackage {
     pub content_strategy: ContentStrategySummary,
 }
 
+/// Static operator guidance for research strategy packages.
+///
+/// Order is intentional (#275): Primary/ACTIVE new-article seed rule first,
+/// then never do_not_expand/LEGACY, then shortlist health as prioritization /
+/// fallback only — never equal-priority new-article seed source when strategy
+/// is present. Desk/shortlist/brand are judgment aids / empty-strategy fallback.
 const STRATEGY_GUIDANCE: &[&str] = &[
-    "Propose 2–6 seed themes from desk (site-overview/articles/GSC) + shortlist + brand context.",
-    "Prefer content_strategy from this package when present: seed from Primary keywords and ACTIVE clusters only (intentional PLANNED pillars OK when expanding a planned pillar).",
+    "For new-article research: seed research-pull from content_strategy.primary_keywords + ACTIVE cluster keywords first when present (intentional PLANNED pillars OK when expanding a planned pillar).",
     "Never seed or expand do_not_expand phrases or LEGACY clusters — even if API volume ranks them high.",
-    "Prefer shortlist health_status=promising and status=pending; avoid depleted themes. Deprioritize MAINTAIN clusters vs ACTIVE/primary.",
+    "Shortlist health for prioritization and fallback only when strategy empty or Primary/ACTIVE exhausted/covered: prefer health_status=promising and status=pending; avoid depleted; deprioritize MAINTAIN vs ACTIVE/primary. Do not treat top shortlist by impressions/promising as default new-article seeds when Primary or ACTIVE exist.",
+    "Desk (site-overview/articles/GSC), shortlist, and brand are judgment aids for existing-page fixes and strategy-empty fallback — not equal-priority new-article seed peers when strategy is present.",
     "Pull candidates with research-pull -K \"seed1,seed2,...\" (deterministic custom_keyword_research; no nested theme LLM).",
     "After pull, reject LEGACY / do_not_expand candidates before select-keywords; then select-keywords -I <task-id> -K kw1,kw2 (max 3), then write-context / write-submit Path B.",
     "Desktop research_keywords (nested seed extraction) remains available for UI; prefer research-pull on CLI weekly path.",
 ];
+
+/// Dynamic line when strategy has Primary/ACTIVE fuel but pending shortlist is
+/// empty or only adjacent (no `strategy_status=active` pending rows).
+const STRATEGY_ADJACENT_SHORTLIST_GUIDANCE: &str = "Strategy Primary/ACTIVE present but pending shortlist is adjacent-only or empty — seed research-pull from content_strategy.primary_keywords / ACTIVE clusters, not territory GSC heads.";
+
+/// True when summary has Primary keywords or any ACTIVE cluster keywords.
+fn strategy_has_primary_or_active(cs: &ContentStrategySummary) -> bool {
+    !cs.primary_keywords.is_empty()
+        || cs
+            .active_clusters
+            .iter()
+            .any(|c| !c.keywords.is_empty())
+}
+
+/// True when any pending shortlist row is tagged `strategy_status == "active"`.
+fn pending_shortlist_has_active(shortlist: &[ShortlistSummaryEntry]) -> bool {
+    shortlist.iter().any(|e| {
+        e.status == "pending" && e.strategy_status.as_deref() == Some("active")
+    })
+}
+
+/// Build static + optional dynamic guidance for a research strategy package.
+fn build_strategy_guidance(
+    content_strategy: &ContentStrategySummary,
+    shortlist: &[ShortlistSummaryEntry],
+) -> Vec<String> {
+    let mut guidance: Vec<String> = STRATEGY_GUIDANCE.iter().map(|s| (*s).to_string()).collect();
+    if strategy_has_primary_or_active(content_strategy) {
+        let pending_empty = !shortlist.iter().any(|e| e.status == "pending");
+        if pending_empty || !pending_shortlist_has_active(shortlist) {
+            guidance.push(STRATEGY_ADJACENT_SHORTLIST_GUIDANCE.to_string());
+        }
+    }
+    guidance
+}
 
 /// Full Path B `research-context` envelope: pure strategy package + shortlist refresh fields.
 ///
@@ -205,13 +246,14 @@ pub fn build_research_strategy_package(
 
     let open_research_task_ids = list_open_research_task_ids(conn, project_id)?;
     let content_strategy = load_content_strategy_summary(conn, project_id);
+    let guidance = build_strategy_guidance(&content_strategy, &shortlist);
 
     Ok(ResearchStrategyPackage {
         project_id: project_id.to_string(),
         shortlist,
         health_counts,
         open_research_task_ids,
-        guidance: STRATEGY_GUIDANCE.iter().map(|s| (*s).to_string()).collect(),
+        guidance,
         content_strategy,
     })
 }
@@ -697,6 +739,160 @@ mod tests {
         // No project.md → empty strategy → strategy fields absent (serde skip).
         assert!(pkg.shortlist.iter().all(|e| e.strategy_cluster.is_none()));
         assert!(pkg.shortlist.iter().all(|e| e.strategy_status.is_none()));
+        // Empty strategy → no dynamic adjacent-shortlist line (#275).
+        assert!(
+            !pkg.guidance
+                .iter()
+                .any(|g| g.contains(STRATEGY_ADJACENT_SHORTLIST_GUIDANCE)
+                    || g.contains("adjacent-only")),
+            "dynamic adjacent guidance must not appear when strategy is empty"
+        );
+    }
+
+    #[test]
+    fn strategy_guidance_primary_active_before_shortlist_health() {
+        // Static order (#275): Primary/ACTIVE seed rule appears before shortlist health.
+        let primary_idx = STRATEGY_GUIDANCE
+            .iter()
+            .position(|g| g.contains("primary_keywords") && g.contains("ACTIVE"))
+            .expect("Primary/ACTIVE seed guidance");
+        let shortlist_idx = STRATEGY_GUIDANCE
+            .iter()
+            .position(|g| g.contains("Shortlist health") || g.contains("health_status=promising"))
+            .expect("shortlist health guidance");
+        assert!(
+            primary_idx < shortlist_idx,
+            "Primary/ACTIVE guidance (idx {primary_idx}) must precede shortlist health (idx {shortlist_idx})"
+        );
+        // Desk/shortlist must not be equal-priority seed peers when strategy present.
+        assert!(
+            STRATEGY_GUIDANCE
+                .iter()
+                .any(|g| g.contains("not equal-priority new-article seed")),
+            "desk/shortlist equal-peer seed wording should be demoted"
+        );
+    }
+
+    #[test]
+    fn strategy_guidance_dynamic_line_when_pending_adjacent_only() {
+        // Strategy has Primary/ACTIVE but pending shortlist has no active-tagged rows.
+        let (conn, dir) = strategy_fixture_db(
+            r#"# Test
+
+## Search Keywords
+
+### Primary Keywords
+- keyword research
+
+## Content Clusters
+
+### Cluster 1: SEO Fundamentals (ACTIVE)
+- technical seo
+
+### Cluster 2: Old Services (LEGACY)
+- web design packages
+"#,
+        );
+        // Pending territory-style head (matches LEGACY only — not active).
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, health_status, added_at)
+             VALUES ('proj1', 'web design packages', '[]', 'territory_analysis', 'pending', 'high',
+                     'promising', ?1)",
+            rusqlite::params![chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+
+        let pkg = build_research_strategy_package(&conn, "proj1").unwrap();
+        assert!(
+            strategy_has_primary_or_active(&pkg.content_strategy),
+            "fixture must load Primary/ACTIVE"
+        );
+        assert!(
+            !pending_shortlist_has_active(&pkg.shortlist),
+            "pending rows should not be strategy_status=active"
+        );
+        assert!(
+            pkg.guidance
+                .iter()
+                .any(|g| g.contains(STRATEGY_ADJACENT_SHORTLIST_GUIDANCE)
+                    || g.contains("adjacent-only or empty")),
+            "dynamic adjacent guidance missing; guidance={:?}",
+            pkg.guidance
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn strategy_guidance_dynamic_line_when_pending_empty() {
+        let (conn, dir) = strategy_fixture_db(
+            r#"# Test
+
+## Search Keywords
+
+### Primary Keywords
+- seo tools
+
+## Content Clusters
+
+### Cluster 1: SEO Fundamentals (ACTIVE)
+- technical seo
+"#,
+        );
+        // No shortlist rows at all.
+        let pkg = build_research_strategy_package(&conn, "proj1").unwrap();
+        assert!(pkg.shortlist.is_empty());
+        assert!(
+            pkg.guidance
+                .iter()
+                .any(|g| g.contains("adjacent-only or empty")),
+            "empty pending shortlist with strategy should push dynamic line; guidance={:?}",
+            pkg.guidance
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn strategy_guidance_no_dynamic_line_when_pending_has_active() {
+        let (conn, dir) = strategy_fixture_db(
+            r#"# Test
+
+## Search Keywords
+
+### Primary Keywords
+- keyword research
+
+## Content Clusters
+
+### Cluster 1: SEO Fundamentals (ACTIVE)
+- technical seo
+"#,
+        );
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, health_status, added_at)
+             VALUES ('proj1', 'technical seo', '[]', 'strategy_inject', 'pending', 'high',
+                     'promising', ?1)",
+            rusqlite::params![chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+
+        let pkg = build_research_strategy_package(&conn, "proj1").unwrap();
+        assert_eq!(
+            pkg.shortlist[0].strategy_status.as_deref(),
+            Some("active")
+        );
+        assert!(
+            !pkg.guidance
+                .iter()
+                .any(|g| g.contains("adjacent-only or empty")),
+            "dynamic line must not appear when pending has active-tagged row; guidance={:?}",
+            pkg.guidance
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Full schema so strategy can resolve project path + project.md.
