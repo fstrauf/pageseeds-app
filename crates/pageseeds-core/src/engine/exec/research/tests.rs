@@ -1,10 +1,13 @@
-//! Tests for `final_selection` — extracted into a sibling file to keep the
-//! implementation under the size threshold, following the
+//! Tests for research final selection / relevance — extracted into a sibling
+//! file to keep the implementation under the size threshold, following the
 //! `engine/exec/keywords/tests.rs` precedent (wired via `mod tests;` in `mod.rs`).
 
 #[cfg(test)]
 mod tests {
     use crate::engine::exec::research::final_selection::*;
+    use crate::engine::exec::research::{
+        apply_off_domain_filter, strategy_context_for_relevance,
+    };
     use crate::models::research::{
         FilterFunnel, KeywordPipelineOutput, ScoredKeyword, SelectedKeyword,
     };
