@@ -31,35 +31,6 @@ fn project_md_template(project_name: &str) -> String {
     )
 }
 
-/// Template for reddit_config.md
-fn reddit_config_template() -> &'static str {
-    r#"# Reddit Configuration
-
-## Product Name
-<!-- Your product or service name -->
-- 
-
-## Mention Stance
-<!-- REQUIRED, RECOMMENDED, OPTIONAL, or OMIT -->
-- OPTIONAL
-
-## Trigger Topics
-<!-- Topics to search for on Reddit -->
-- topic 1
-- topic 2
-- topic 3
-
-## Seed Subreddits
-<!-- Subreddits to monitor (without r/ prefix) -->
-- subreddit1
-- subreddit2
-
-## Excluded Subreddits
-<!-- Subreddits to ignore -->
-- 
-"#
-}
-
 /// Template for _reply_guardrails.md
 fn reply_guardrails_template() -> &'static str {
     r#"# Reddit Reply Guardrails
@@ -86,14 +57,17 @@ fn reply_guardrails_template() -> &'static str {
 
 /// Initialize a complete project workspace with all required files.
 /// This creates:
-/// 1. .github/automation/ directory structure
-/// 2. seo_workspace.json with auto-discovered content_dir
-/// 3. articles.json (empty with nextArticleId: 1)
-/// 4. project.md template
-/// 5. reddit_config.md template
-/// 6. reddit/_reply_guardrails.md template
-/// 7. artifacts/, task_results/ directories
-/// 8. Updates .gitignore
+/// 1. `.github/automation/` directory structure
+/// 2. `seo_workspace.json` with auto-discovered content_dir
+/// 3. `articles.json` (empty with nextArticleId: 1)
+/// 4. `project.md` template (prose / brand context only)
+/// 5. `project.yaml` with schema-v1 defaults (structured strategy + Reddit knobs)
+/// 6. `reddit/_reply_guardrails.md` template
+/// 7. `artifacts/`, `task_results/` directories
+/// 8. Updates `.gitignore`
+///
+/// Does **not** create `reddit_config.md` (legacy migration source only).
+/// Existing `reddit_config.md` is left untouched on re-init.
 ///
 /// Returns a summary of what was created.
 pub fn initialize_project_workspace(
@@ -157,13 +131,18 @@ pub fn initialize_project_workspace(
         created.push("project.md".to_string());
     }
 
-    // Create reddit_config.md if it doesn't exist
-    let reddit_config_path = automation_dir.join("reddit_config.md");
-    if !reddit_config_path.exists() {
-        std::fs::write(&reddit_config_path, reddit_config_template())
-            .map_err(|e| format!("Cannot write reddit_config.md: {}", e))?;
-        created.push("reddit_config.md".to_string());
+    // Create project.yaml if it doesn't exist (typed strategy + Reddit SOT)
+    let project_yaml_path = crate::project_config::project_config_path(&automation_dir);
+    if !project_yaml_path.exists() {
+        crate::project_config::save_project_config(
+            &project_yaml_path,
+            &crate::project_config::ProjectConfig::default(),
+        )
+        .map_err(|e| format!("Cannot write project.yaml: {}", e))?;
+        created.push("project.yaml".to_string());
     }
+
+    // Do NOT create reddit_config.md (legacy migrate-only). Leave existing alone.
 
     // Create reddit/_reply_guardrails.md if it doesn't exist
     let guardrails_path = reddit_dir.join("_reply_guardrails.md");
@@ -233,4 +212,104 @@ fn update_gitignore(repo_root: &Path, _automation_dir: &Path) -> std::result::Re
         .map_err(|e| format!("Cannot write .gitignore: {}", e))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project_config::{load_project_config, project_config_path, SUPPORTED_SCHEMA_VERSION};
+
+    fn temp_repo(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("ps_init_workspace_{tag}_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn cleanup(dir: &Path) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn initialize_project_workspace_creates_yaml_not_reddit_config() {
+        let repo = temp_repo("yaml_first");
+        let created = initialize_project_workspace(&repo, Some("https://example.com/"), Some("Test"))
+            .expect("init should succeed");
+
+        let automation = repo.join(".github").join("automation");
+        let yaml_path = project_config_path(&automation);
+
+        assert!(
+            created.iter().any(|s| s == "project.yaml"),
+            "created list should include project.yaml: {created:?}"
+        );
+        assert!(
+            !created.iter().any(|s| s.contains("reddit_config")),
+            "must not create reddit_config.md: {created:?}"
+        );
+
+        assert!(yaml_path.exists(), "project.yaml must exist");
+        assert!(automation.join("project.md").exists());
+        assert!(automation.join("reddit").join("_reply_guardrails.md").exists());
+        assert!(!automation.join("reddit_config.md").exists());
+
+        let cfg = load_project_config(&yaml_path).expect("project.yaml must load");
+        assert_eq!(cfg.schema_version, SUPPORTED_SCHEMA_VERSION);
+        assert!(cfg.search_keywords.primary.is_empty());
+        assert!(cfg.clusters.is_empty());
+        assert_eq!(
+            cfg.reddit.mention_stance,
+            crate::reddit::config::MentionStance::Optional
+        );
+
+        cleanup(&repo);
+    }
+
+    #[test]
+    fn initialize_project_workspace_is_idempotent() {
+        let repo = temp_repo("idempotent");
+        let first = initialize_project_workspace(&repo, None, Some("Idem")).unwrap();
+        assert!(!first.is_empty(), "first init should create files");
+
+        let second = initialize_project_workspace(&repo, None, Some("Idem")).unwrap();
+        assert!(
+            second.is_empty(),
+            "second init should create nothing: {second:?}"
+        );
+
+        let automation = repo.join(".github").join("automation");
+        assert!(project_config_path(&automation).exists());
+        assert!(!automation.join("reddit_config.md").exists());
+
+        // Still no reddit_config after re-init
+        let third = initialize_project_workspace(&repo, None, None).unwrap();
+        assert!(third.is_empty());
+        assert!(!automation.join("reddit_config.md").exists());
+
+        cleanup(&repo);
+    }
+
+    #[test]
+    fn initialize_project_workspace_preserves_existing_reddit_config() {
+        let repo = temp_repo("preserve_legacy");
+        let automation = repo.join(".github").join("automation");
+        std::fs::create_dir_all(&automation).unwrap();
+        let legacy = automation.join("reddit_config.md");
+        std::fs::write(&legacy, "# legacy reddit config\n").unwrap();
+
+        let created = initialize_project_workspace(&repo, None, Some("Legacy")).unwrap();
+        assert!(
+            !created.iter().any(|s| s.contains("reddit_config")),
+            "must not rewrite/claim reddit_config: {created:?}"
+        );
+        assert!(legacy.exists());
+        let body = std::fs::read_to_string(&legacy).unwrap();
+        assert!(body.contains("legacy reddit config"));
+        assert!(project_config_path(&automation).exists());
+
+        cleanup(&repo);
+    }
 }

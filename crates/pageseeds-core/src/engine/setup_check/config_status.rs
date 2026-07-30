@@ -108,16 +108,24 @@ pub fn collect_config_file_statuses(
         });
     }
 
-    // Typed project config (project.yaml) — optional inventory row (#291)
+    // Typed project config (project.yaml) — structured strategy + Reddit SOT (#294)
     {
         let path = automation_dir.join("project.yaml");
         let (full_path, full_link) = path_strings(&path);
         let configured = path.exists() && file_has_non_whitespace_content(&path);
+        let has_legacy_md = automation_dir.join("project.md").exists()
+            || automation_dir.join("reddit_config.md").exists();
         let detail = if !path.exists() {
-            "Optional file missing — migrate with pageseeds-cli migrate-project-config -p ."
-                .to_string()
+            if has_legacy_md {
+                "Missing — migrate legacy MD with: pageseeds-cli migrate-project-config -p . --dry-run \
+                 (or setup/init for defaults when no legacy)"
+                    .to_string()
+            } else {
+                "Missing — setup/init creates schema-v1 defaults (strategy + Reddit knobs)"
+                    .to_string()
+            }
         } else if configured {
-            "Present".to_string()
+            "Present (typed strategy + Reddit knobs)".to_string()
         } else {
             "File is empty".to_string()
         };
@@ -128,14 +136,14 @@ pub fn collect_config_file_statuses(
             relative_path: ".github/automation/project.yaml".to_string(),
             full_path,
             full_link,
-            used_by: "Typed project strategy + reddit config (schema v1)".to_string(),
+            used_by: "Structured strategy + Reddit search knobs (schema v1 SOT)".to_string(),
             required: false,
             configured,
             detail,
         });
     }
 
-    // Shared context / sentiment style files (consolidated project.md)
+    // Shared context / brand prose (project.md) — not structured strategy SOT
     {
         let path = automation_dir.join("project.md");
         let (full_path, full_link) = path_strings(&path);
@@ -150,9 +158,9 @@ pub fn collect_config_file_statuses(
 
         let configured = has_project_md || has_legacy;
         let detail = if has_project_md {
-            "Present (consolidated)".to_string()
+            "Present (prose / brand context)".to_string()
         } else if has_legacy {
-            "Legacy files detected — consider migrating to project.md".to_string()
+            "Legacy files detected — consider consolidating to project.md".to_string()
         } else {
             "Optional file missing".to_string()
         };
@@ -164,14 +172,15 @@ pub fn collect_config_file_statuses(
             relative_path: ".github/automation/project.md".to_string(),
             full_path,
             full_link,
-            used_by: "SEO + Reddit prompt context".to_string(),
+            used_by: "Prose / brand prompt context (structured knobs live in project.yaml)"
+                .to_string(),
             required: false,
             configured,
             detail,
         });
     }
 
-    // Reddit-specific files
+    // Legacy reddit_config.md — migrate diagnostics only (not live SOT)
     {
         let path = automation_dir.join("reddit_config.md");
         let (full_path, full_link) = path_strings(&path);
@@ -179,17 +188,18 @@ pub fn collect_config_file_statuses(
         files.push(ProjectConfigFileStatus {
             id: "reddit_config".to_string(),
             category: "reddit".to_string(),
-            label: "Reddit config".to_string(),
+            label: "Reddit config (legacy MD)".to_string(),
             relative_path: ".github/automation/reddit_config.md".to_string(),
             full_path,
             full_link,
-            used_by: "Reddit opportunity search".to_string(),
+            used_by: "Legacy migration source for project.yaml reddit block (not live SOT)"
+                .to_string(),
             required: false,
             configured,
             detail: if !path.exists() {
-                "Optional file missing".to_string()
+                "Absent (OK when project.yaml is present)".to_string()
             } else if configured {
-                "Present".to_string()
+                "Present — migrate into project.yaml if not already".to_string()
             } else {
                 "File is empty".to_string()
             },

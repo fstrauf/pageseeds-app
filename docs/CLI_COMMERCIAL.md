@@ -69,7 +69,9 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 | `research-shortlist` | **Read existing shortlist only** |
 | `article-quality-reviews` | Quality review list |
 | `research-context` | **Package/inspect only — no pull** |
-| `strategy` | **Read only** — parsed project.md content strategy as JSON |
+| `strategy` | **Read only** — structured content strategy from `project.yaml` (via ensure; auto-migrates legacy MD) as JSON |
+| `project-config-status` | **Read only** — `project.yaml` vs legacy MD readiness |
+| `migrate-project-config` | Deterministic MD → `project.yaml` migrator (`--dry-run` plans only) |
 
 ### Inspect
 
@@ -79,8 +81,8 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 | `get-task` | Get one task |
 | `validate-article` | Validate article structure |
 
-**Free tool names (27):**  
-`list-projects`, `create-project`, `setup`, `site-overview`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `video-clip-context`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `strategy`, `list-tasks`, `get-task`, `validate-article`
+**Free tool names (29):**  
+`list-projects`, `create-project`, `setup`, `site-overview`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `video-clip-context`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `strategy`, `project-config-status`, `migrate-project-config`, `list-tasks`, `get-task`, `validate-article`
 
 ---
 

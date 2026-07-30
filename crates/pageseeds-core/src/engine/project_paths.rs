@@ -13,11 +13,11 @@
 ///       task_list.json
 ///       artifacts/
 ///       task_results/
-///       reddit/
+///       reddit/                  # _reply_guardrails.md, drafts, …
 ///       manifest.json
-///       project.md
-///       project.yaml        # typed ProjectConfig (see project_config module)
-///       reddit_config.md
+///       project.md               # prose / brand context for prompts
+///       project.yaml             # typed ProjectConfig SOT (strategy + Reddit knobs)
+///       # reddit_config.md       # LEGACY migrate-only (not created by init)
 /// ```
 use std::path::{Path, PathBuf};
 

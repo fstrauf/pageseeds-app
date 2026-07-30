@@ -16,7 +16,7 @@ pub(crate) fn check_automation_dir(automation_dir: &Path, checks: &mut Vec<Setup
                 automation_dir.display()
             ),
             fix_hint: Some(
-                "Click 'Initialize Project' to create the workspace automatically".into(),
+                "Run: pageseeds-cli setup -p . --yes (creates automation workspace)".into(),
             ),
             auto_fixable: true, // Now fixable via initialize_project_workspace
         });
@@ -33,7 +33,9 @@ pub(crate) fn check_articles_json(path: &Path, exists: bool, checks: &mut Vec<Se
                 "Expected at {} — content workflows cannot run without it",
                 path.display()
             ),
-            fix_hint: Some("Click 'Initialize Project' to create an empty articles.json".into()),
+            fix_hint: Some(
+                "Run: pageseeds-cli setup -p . --yes (creates empty articles.json)".into(),
+            ),
             auto_fixable: true, // Now fixable via initialize_project_workspace
         });
     }
@@ -149,7 +151,7 @@ pub(crate) fn check_optional_config_files(automation_dir: &Path, checks: &mut Ve
         return;
     }
 
-    // Check for project.md (or legacy files)
+    // Check for project.md (or legacy files) — prose / brand context
     let project_md = automation_dir.join("project.md");
     let legacy_summary = automation_dir.join("project_summary.md");
     let legacy_brand = automation_dir.join("brandvoice.md");
@@ -159,29 +161,41 @@ pub(crate) fn check_optional_config_files(automation_dir: &Path, checks: &mut Ve
             id: "project_md_missing".into(),
             severity: Severity::Warn,
             title: "Project context not configured".into(),
-            detail: "project.md is missing — AI prompts won't have project context".into(),
-            fix_hint: Some("Click 'Initialize Project' to create a project.md template".into()),
-            auto_fixable: true,
-        });
-    }
-
-    // Check for reddit_config.md
-    let reddit_config = automation_dir.join("reddit_config.md");
-    if !reddit_config.exists() {
-        checks.push(SetupCheckItem {
-            id: "reddit_config_missing".into(),
-            severity: Severity::Warn,
-            title: "Reddit not configured".into(),
-            detail: "reddit_config.md is missing — Reddit features won't work".into(),
+            detail: "project.md is missing — AI prompts won't have project/brand context".into(),
             fix_hint: Some(
-                "Click 'Initialize Project' to create a reddit_config.md template".into(),
+                "Run: pageseeds-cli setup -p . --yes (creates project.md template)".into(),
             ),
             auto_fixable: true,
         });
     }
 
+    // Structured strategy + Reddit knobs live in project.yaml (not reddit_config.md).
+    let yaml_path = crate::project_config::project_config_path(automation_dir);
+    if !yaml_path.exists() {
+        // Missing YAML with no legacy MD is a setup gap (init creates defaults).
+        // Legacy-only / invalid YAML is handled by project_config_needs_migration below.
+        let has_legacy_md = project_md.exists()
+            || automation_dir.join("reddit_config.md").exists();
+        if !has_legacy_md {
+            checks.push(SetupCheckItem {
+                id: "project_yaml_missing".into(),
+                severity: Severity::Warn,
+                title: "project.yaml not configured".into(),
+                detail: "project.yaml is missing — structured strategy and Reddit search knobs \
+                         live here (schema v1). Setup/init writes defaults."
+                    .into(),
+                fix_hint: Some(
+                    "Run: pageseeds-cli setup -p . --yes (creates project.yaml defaults)".into(),
+                ),
+                auto_fixable: true,
+            });
+        }
+    }
+
     // Align with canonical readiness (#291): invalid/unsupported YAML + legacy
     // also needs migration (not only missing YAML).
+    // Do not warn about missing reddit_config.md when YAML is present — it is
+    // legacy migrate-only, not the live Reddit SOT.
     let status = crate::project_config::project_config_status(automation_dir);
     if status.needs_migration {
         let detail = match status.yaml_valid {
@@ -211,7 +225,9 @@ pub(crate) fn check_optional_config_files(automation_dir: &Path, checks: &mut Ve
             title: "Reply guardrails not configured".into(),
             detail: "reddit/_reply_guardrails.md is missing — reply safety guidelines not set"
                 .into(),
-            fix_hint: Some("Click 'Initialize Project' to create guardrails template".into()),
+            fix_hint: Some(
+                "Run: pageseeds-cli setup -p . --yes (creates guardrails template)".into(),
+            ),
             auto_fixable: true,
         });
     }

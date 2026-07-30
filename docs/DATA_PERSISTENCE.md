@@ -32,14 +32,15 @@ PageSeeds uses a **dual-store architecture**:
 │   │   COMMITTED CONTENT (JSON)                                   │     │
 │   │                                                              │     │
 │   │   {project_root}/                                            │     │
-│   │   └── content_automation/                                    │     │
+│   │   └── .github/automation/                                    │     │
 │   │       ├── articles.json          # Source of truth for        │     │
 │   │       ├── task_list.json         # SEO content inventory      │     │
+│   │       ├── project.yaml           # Strategy + Reddit knobs    │     │
+│   │       ├── project.md             # Prose / brand context      │     │
 │   │       ├── gsc_collection.json    # URL inspection results     │     │
 │   │       ├── gsc_summary.json       # Grouped analysis           │     │
 │   │       ├── content_audit.json     # Health check results       │     │
-│   │       ├── recommendations.json   # Review suggestions         │     │
-│   │       └── reddit_config.md       # Search parameters          │     │
+│   │       └── recommendations.json   # Review suggestions         │     │
 │   │                                                              │     │
 │   │   Git-tracked: Yes (collaboration & history)                │     │
 │   └──────────────────────────────────────────────────────────────┘     │
@@ -250,12 +251,15 @@ All migrations must be idempotent (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF 
 │   ├── article-one.mdx
 │   └── article-two.mdx
 │
-└── content_automation/               # SEO automation directory
+└── .github/automation/               # SEO automation directory
     ├── manifest.json                 # Project configuration
     ├── articles.json                 # Content inventory
     ├── task_list.json                # Task definitions
-    ├── reddit_config.md              # Reddit search params
-    ├── SKILL.md                      # Agent instructions
+    ├── project.yaml                  # Typed strategy + Reddit knobs (SOT)
+    ├── project.md                    # Prose / brand prompt context
+    ├── reddit/                       # Reply guardrails, drafts, …
+    │   └── _reply_guardrails.md
+    │   # reddit_config.md            # LEGACY migrate-only (not live SOT)
     │
     └── artifacts/                    # Generated artifacts
         ├── gsc_collection.json
@@ -327,7 +331,7 @@ Project configuration.
   "gsc_site": "https://example.com/",
   "sitemap": "https://example.com/sitemap.xml",
   "content_dir": "content",
-  "automation_dir": "content_automation"
+  "automation_dir": ".github/automation"
 }
 ```
 
