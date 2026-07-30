@@ -261,14 +261,87 @@ pub struct StepOutcomeOverride {
     pub artifact: Option<crate::models::task::TaskArtifact>,
 }
 
-/// Ingest new content files after a content-write step, tag them with the
-/// task's keyword metadata, mark them as drafts, and export the articles.json
-/// projection.
+/// Demote newly ingested article basenames to catalog `draft`, applying keyword
+/// meta only to `keyword_basename` when set (issues #168 / #272).
+///
+/// Co-ingested orphans (locator seed MDX, sibling drafts) never inherit the
+/// write-task keyword — Path B `register_submitted_article` and nested
+/// `ingest_content_write_files` both use this so the exact-keyword collision
+/// gate cannot false-positive on seed/orphan rows.
+pub(crate) fn demote_ingested_to_draft_with_optional_keyword(
+    conn: &Connection,
+    project_id: &str,
+    files: &[String],
+    keyword_basename: Option<&str>,
+    keyword: Option<&str>,
+    kd_str: Option<&str>,
+    vol: i64,
+) {
+    let has_keyword_meta = keyword.is_some() || kd_str.is_some() || vol != 0;
+    for filename in files {
+        let is_target = keyword_basename
+            .map(|b| !b.is_empty() && b == filename.as_str())
+            .unwrap_or(false);
+        if has_keyword_meta && is_target {
+            let _ = conn.execute(
+                "UPDATE articles
+                 SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
+                     status='draft'
+                 WHERE project_id=?4 AND file LIKE ?5",
+                rusqlite::params![
+                    keyword,
+                    kd_str,
+                    vol,
+                    project_id,
+                    format!("%{filename}"),
+                ],
+            );
+        } else {
+            let _ = conn.execute(
+                "UPDATE articles SET status='draft'
+                 WHERE project_id=?1 AND file LIKE ?2",
+                rusqlite::params![project_id, format!("%{filename}")],
+            );
+        }
+    }
+}
+
+/// Resolve the written content file basename for a nested content-write task.
+///
+/// Uses the same `find_written_file` lookup as `content_write_verify` / link
+/// verify so keyword stamp targets one file only.
+fn resolve_written_content_basename(
+    task: &Task,
+    project_path: &std::path::Path,
+) -> Option<String> {
+    let content_dir = crate::content::locator::resolve(project_path, None).selected;
+    crate::engine::exec::content::find_written_file(task, project_path, content_dir.as_deref())
+        .and_then(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+        })
+}
+
+/// Whether an error string is the #272 exact-keyword collision gate message.
+pub(crate) fn is_keyword_collision_error(message: &str) -> bool {
+    message.contains("Exact target_keyword collision")
+}
+
+/// Ingest new content files after a content-write step, demote them to draft,
+/// stamp keyword meta **only** on the written basename (after an exact-keyword
+/// collision check), and export the articles.json projection.
 ///
 /// Shared by `after_step` (post-write registration) and the deterministic
 /// `content_write_verify` step (idempotent safety net). Returns the ingest
 /// summary so callers can distinguish "registered N new files" from "nothing
 /// new on disk".
+///
+/// On exact `target_keyword` collision (issue #272): newly ingested files are
+/// still demoted to draft **without** the colliding keyword (orphan without K
+/// is acceptable), export runs, and this returns `Err` with
+/// `format_keyword_collision_message` so write_verify fails closed and no
+/// second live catalog row owns K.
 pub(crate) fn ingest_content_write_files(
     conn: &Connection,
     task: &Task,
@@ -278,31 +351,70 @@ pub(crate) fn ingest_content_write_files(
         crate::content::article_index::ingest_orphans(conn, &task.project_id, project_path)
             .map_err(|e| e.to_string())?;
 
-    if ingested.ingested > 0 {
-        let (keyword, kd_str, vol) = parse_content_task_keyword_meta(task);
-        for filename in &ingested.files {
-            let _ = conn.execute(
-                "UPDATE articles
-                 SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
-                     status='draft'
-                 WHERE project_id=?4 AND file LIKE ?5",
-                rusqlite::params![
-                    keyword.as_deref(),
-                    kd_str.as_deref(),
-                    vol,
-                    &task.project_id,
-                    format!("%{}", filename),
-                ],
-            );
-        }
-        let _ =
-            crate::content::article_index::export_projection(conn, &task.project_id, project_path);
-        log::info!(
-            "[content_register] registered {} article(s): {:?}",
-            ingested.ingested,
-            ingested.files
-        );
+    if ingested.ingested == 0 {
+        return Ok(ingested);
     }
+
+    let written_basename = resolve_written_content_basename(task, project_path);
+    let (keyword, kd_str, vol) = parse_content_task_keyword_meta(task);
+
+    // Path B order: check collisions → only then tag written basename with K.
+    // Co-ingested orphans never receive K (issue #272).
+    if let (Some(basename), Some(kw)) = (written_basename.as_deref(), keyword.as_deref()) {
+        if ingested.files.iter().any(|f| f.as_str() == basename) {
+            let slug = crate::content::ops::slug_from_filename(basename);
+            let colliders = crate::content::article_index::find_target_keyword_collisions(
+                conn,
+                &task.project_id,
+                kw,
+                Some(slug.as_str()),
+                None,
+            )
+            .map_err(|e| e.to_string())?;
+            if !colliders.is_empty() {
+                // Demote all without keyword — no twin row with K.
+                demote_ingested_to_draft_with_optional_keyword(
+                    conn,
+                    &task.project_id,
+                    &ingested.files,
+                    None,
+                    None,
+                    None,
+                    0,
+                );
+                let _ = crate::content::article_index::export_projection(
+                    conn,
+                    &task.project_id,
+                    project_path,
+                );
+                log::warn!(
+                    "[content_register] keyword collision for {} — registered draft without target_keyword: {:?}",
+                    basename,
+                    ingested.files
+                );
+                return Err(
+                    crate::content::article_index::format_keyword_collision_message(kw, &colliders),
+                );
+            }
+        }
+    }
+
+    demote_ingested_to_draft_with_optional_keyword(
+        conn,
+        &task.project_id,
+        &ingested.files,
+        written_basename.as_deref(),
+        keyword.as_deref(),
+        kd_str.as_deref(),
+        vol,
+    );
+    let _ = crate::content::article_index::export_projection(conn, &task.project_id, project_path);
+    log::info!(
+        "[content_register] registered {} article(s): {:?} (keyword on {:?})",
+        ingested.ingested,
+        ingested.files,
+        written_basename
+    );
 
     Ok(ingested)
 }

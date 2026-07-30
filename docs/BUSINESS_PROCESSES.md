@@ -145,6 +145,7 @@ Session agent writes full MDX to target_file (uses package skill + brief)
   ↓
 write-submit (-f path | -S slug) until validation ok
   → structural gates (validate_article, ≥800 words)
+  → exact target_keyword collision hard-fail if another article owns K (#272; retarget or consolidate — no silent twin)
   → ingest_orphans + force catalog `draft` (#168; never auto-publish)
   → keyword tag + mark write_article done
   → spawn cluster_and_link

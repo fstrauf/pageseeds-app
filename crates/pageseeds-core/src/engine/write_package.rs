@@ -321,6 +321,56 @@ pub fn submit_written_article(
         });
     }
 
+    // Exact target_keyword collision hard-fail (issue #272) — before register so
+    // a twin URL is never committed. Empty keyword skips the gate. Exclude self
+    // by slug so re-submit of the same article does not false-positive.
+    if let Some(ref kw) = target_keyword {
+        let colliders = crate::content::article_index::find_target_keyword_collisions(
+            conn,
+            project_id,
+            kw,
+            Some(slug.as_str()),
+            None,
+        )
+        .map_err(|e| format!("Failed to check target_keyword collisions: {e}"))?;
+        if !colliders.is_empty() {
+            let message =
+                crate::content::article_index::format_keyword_collision_message(kw, &colliders);
+            let mut checks = checks;
+            checks.push(ArticleCheck {
+                id: "target_keyword_unique".into(),
+                pass: false,
+                detail: Some(format!(
+                    "colliders={}",
+                    colliders
+                        .iter()
+                        .map(|c| format!(
+                            "id={} slug={} page_type={}",
+                            c.id,
+                            c.url_slug,
+                            c.page_type.as_deref().unwrap_or("unknown")
+                        ))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )),
+            });
+            return Ok(SubmitResult {
+                ok: false,
+                slug: Some(slug),
+                path: Some(file_path.to_string_lossy().to_string()),
+                validation: Some(validation),
+                checks,
+                ingested: false,
+                write_task_id: write_task.as_ref().map(|t| t.id.clone()),
+                write_task_status: write_task.as_ref().map(|t| t.status.as_str().to_string()),
+                follow_up_task_ids: vec![],
+                catalog_status: None,
+                catalog_status_reason: None,
+                message: Some(message),
+            });
+        }
+    }
+
     // Single registration path (ingest → draft demote → keyword meta → export → tracked check).
     let outcome = register_submitted_article(
         conn,
@@ -610,35 +660,32 @@ fn register_submitted_article(
         (None, None, 0i64)
     };
 
-    let has_keyword_meta = keyword.is_some() || kd_str.is_some() || vol != 0;
+    // Keyword meta applies only to the submitted file — co-ingested orphans
+    // (e.g. locator seed MDX) must not inherit K, or re-submit would false-
+    // positive the exact-keyword collision gate (issue #272). Shared with
+    // nested `ingest_content_write_files` so the rule cannot drift.
+    let submitted_basename = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
 
     // NOTE: catalog draft until publish; FM status ignored here (issue #168).
     // Always demote newly ingested Path B articles to draft until CLI
     // `publish-content` (#257) — not only when keyword meta is present.
     if summary.ingested > 0 {
-        for filename in &summary.files {
-            if has_keyword_meta {
-                let _ = conn.execute(
-                    "UPDATE articles
-                     SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
-                         status='draft'
-                     WHERE project_id=?4 AND file LIKE ?5",
-                    rusqlite::params![
-                        keyword.as_deref(),
-                        kd_str.as_deref(),
-                        vol,
-                        project_id,
-                        format!("%{filename}"),
-                    ],
-                );
+        crate::engine::post_actions::demote_ingested_to_draft_with_optional_keyword(
+            conn,
+            project_id,
+            &summary.files,
+            if submitted_basename.is_empty() {
+                None
             } else {
-                let _ = conn.execute(
-                    "UPDATE articles SET status='draft'
-                     WHERE project_id=?1 AND file LIKE ?2",
-                    rusqlite::params![project_id, format!("%{filename}")],
-                );
-            }
-        }
+                Some(submitted_basename)
+            },
+            keyword.as_deref(),
+            kd_str.as_deref(),
+            vol,
+        );
     }
 
     let _ = crate::content::article_index::export_projection(conn, project_id, project_path);
@@ -1578,6 +1625,170 @@ mod tests {
         let review = &reviews[0];
         assert_not_before_approx_30d(review.not_before.as_deref());
         assert_content_outcome_target(review, "seo-tools", Some(write_id.as_str()));
+    }
+
+    /// Issue #272: Path B hard-fails when another article already owns exact keyword.
+    #[test]
+    fn submit_fails_on_exact_target_keyword_collision_before_register() {
+        let tmp = TempProjectDir::new();
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+
+        // Existing owner of "seo tools" with a different slug.
+        conn.execute(
+            "INSERT INTO articles (
+                id, title, url_slug, file, target_keyword, status,
+                content_gaps_addressed, project_id, page_type
+             ) VALUES (1, 'SEO Tools Hub', 'hub-seo-tools', './content/blog/hub_seo_tools.mdx',
+                       'seo tools', 'published', '[]', 'proj1', 'hub')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE articles_meta SET next_article_id = 2 WHERE project_id = 'proj1'",
+            [],
+        )
+        .unwrap();
+
+        let file = tmp
+            .path()
+            .join("content")
+            .join("blog")
+            .join("seo_tools_twin.mdx");
+        // Long enough to pass structural floors; keyword still collides.
+        let pad = "word ".repeat(850);
+        let mdx = format!(
+            "---\ntitle: SEO Tools Twin\ndescription: {}\nslug: seo-tools-twin\ndate: \"2024-06-01\"\nstatus: draft\n---\n\n# SEO Tools Twin\n\nseo tools guide for operators.\n\n{pad}\n",
+            meta_ok()
+        );
+        fs::write(&file, mdx).unwrap();
+
+        let result = submit_written_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            file.to_str().unwrap(),
+            SubmitOpts {
+                keyword: Some("seo tools".into()),
+                ..Default::default()
+            },
+        )
+        .expect("structured fail, not domain Err");
+
+        assert!(!result.ok, "collision must hard-fail");
+        assert!(!result.ingested, "must not register twin");
+        assert!(result.follow_up_task_ids.is_empty());
+        let msg = result.message.as_deref().unwrap_or("");
+        assert!(msg.contains("hub-seo-tools"), "msg={msg}");
+        assert!(msg.contains("Retarget") || msg.contains("retarget"), "msg={msg}");
+        assert!(
+            msg.contains("consolidate_cluster") || msg.contains("Consolidate"),
+            "msg={msg}"
+        );
+        let unique = result
+            .checks
+            .iter()
+            .find(|c| c.id == "target_keyword_unique")
+            .expect("target_keyword_unique check");
+        assert!(!unique.pass);
+
+        // Twin must not appear in catalog.
+        let articles = crate::engine::task_store::list_articles(&conn, "proj1").unwrap();
+        assert!(
+            !articles.iter().any(|a| a.url_slug == "seo-tools-twin"
+                || a.file.contains("seo_tools_twin")),
+            "twin must not be registered: {:?}",
+            articles.iter().map(|a| &a.url_slug).collect::<Vec<_>>()
+        );
+        // File left for operator retarget/resubmit.
+        assert!(file.is_file());
+    }
+
+    /// Issue #272: re-submit of the same slug/keyword does not false-positive.
+    #[test]
+    fn submit_same_article_keyword_does_not_collide_with_self() {
+        let tmp = TempProjectDir::new();
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+        let file = tmp
+            .path()
+            .join("content")
+            .join("blog")
+            .join("seo_tools.mdx");
+        fs::write(&file, long_article_mdx("seo tools")).unwrap();
+
+        let opts = SubmitOpts {
+            keyword: Some("seo tools".into()),
+            ..Default::default()
+        };
+        let first = submit_written_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            file.to_str().unwrap(),
+            opts.clone(),
+        )
+        .expect("first submit");
+        assert!(first.ok, "checks={:?}", first.checks);
+        assert!(first.ingested);
+
+        let second = submit_written_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            file.to_str().unwrap(),
+            opts,
+        )
+        .expect("re-submit");
+        assert!(
+            second.ok,
+            "re-submit of same slug must not collision-fail: msg={:?} checks={:?}",
+            second.message,
+            second.checks
+        );
+    }
+
+    /// Issue #272: empty/missing keyword skips the collision gate.
+    #[test]
+    fn submit_without_keyword_skips_collision_gate() {
+        let tmp = TempProjectDir::new();
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+
+        conn.execute(
+            "INSERT INTO articles (
+                id, title, url_slug, file, target_keyword, status,
+                content_gaps_addressed, project_id
+             ) VALUES (1, 'Owned', 'owned-kw', './content/blog/owned.mdx',
+                       'seo tools', 'published', '[]', 'proj1')",
+            [],
+        )
+        .unwrap();
+
+        let file = tmp
+            .path()
+            .join("content")
+            .join("blog")
+            .join("no_keyword.mdx");
+        let pad = "word ".repeat(850);
+        let mdx = format!(
+            "---\ntitle: No Keyword Article\ndescription: {}\nslug: no-keyword\ndate: \"2024-06-01\"\nstatus: draft\n---\n\n# No Keyword Article\n\nGuide without an explicit target keyword for collision skip tests.\n\n{pad}\n",
+            meta_ok()
+        );
+        fs::write(&file, mdx).unwrap();
+
+        let result = submit_written_article(
+            &conn,
+            "proj1",
+            tmp.path(),
+            file.to_str().unwrap(),
+            SubmitOpts::default(), // no keyword
+        )
+        .expect("submit");
+        assert!(
+            result.ok,
+            "empty keyword must skip collision gate: msg={:?} checks={:?}",
+            result.message,
+            result.checks
+        );
+        assert!(result.ingested);
     }
 
     /// Issue #203: unbound write-submit spawns review with synthetic parent idempotency.

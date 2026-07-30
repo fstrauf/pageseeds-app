@@ -391,3 +391,201 @@ use super::topic_health::classify_topic_health;
         let task = make_task();
         assert!(spawn_content_outcome_review_for_slug(&conn, &task, "").is_none());
     }
+
+    // ─── Issue #272 nested write registration ────────────────────────────────
+
+    fn nested_write_fixture() -> (rusqlite::Connection, std::path::PathBuf) {
+        let project_path = std::env::temp_dir().join(format!(
+            "pageseeds-pa-nested-kw-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = std::fs::remove_dir_all(&project_path);
+        std::fs::create_dir_all(project_path.join(".github/automation")).unwrap();
+        std::fs::create_dir_all(project_path.join("content/blog")).unwrap();
+        std::fs::write(
+            project_path.join(".github/automation/seo_workspace.json"),
+            r#"{"content_dir":"content/blog"}"#,
+        )
+        .unwrap();
+        // Locator seed orphan (must not inherit write-task keyword).
+        std::fs::write(
+            project_path.join("content/blog/000_seed.mdx"),
+            "---\ntitle: Seed\ndescription: Seed body for nested keyword isolation tests only.\nslug: seed\ndate: \"2024-01-01\"\n---\n\n# Seed\n\nseed body.\n",
+        )
+        .unwrap();
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, content_dir, active, project_mode)
+             VALUES ('proj1', 'Test', ?1, 'content/blog', 1, 'workspace')",
+            [project_path.to_str().unwrap()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles_meta (project_id, next_article_id) VALUES ('proj1', 1)",
+            [],
+        )
+        .unwrap();
+        (conn, project_path)
+    }
+
+    /// Nested path mirrors Path B: only the written basename gets K; co-ingested
+    /// seed/orphans demote to draft without inheriting the write-task keyword.
+    #[test]
+    fn ingest_content_write_files_stamps_keyword_only_on_written_basename() {
+        let (conn, project_path) = nested_write_fixture();
+        std::fs::write(
+            project_path.join("content/blog/seo_tools_new.mdx"),
+            "---\ntitle: SEO Tools New\ndescription: A new article body for nested keyword stamp isolation.\nslug: seo-tools-new\ndate: \"2024-06-01\"\n---\n\n# SEO Tools New\n\nseo tools body.\n",
+        )
+        .unwrap();
+
+        let mut task = make_task();
+        task.id = "write-kw-only".to_string();
+        task.task_type = "write_article".to_string();
+        task.project_id = "proj1".to_string();
+        task.description = Some(
+            "File: content/blog/seo_tools_new.mdx\nTarget keyword: seo tools\nKD: 28\nVolume: 900"
+                .to_string(),
+        );
+
+        let summary =
+            ingest_content_write_files(&conn, &task, &project_path).expect("ingest should succeed");
+        assert!(
+            summary.ingested >= 2,
+            "seed + written should ingest: {:?}",
+            summary.files
+        );
+        assert!(
+            summary.files.iter().any(|f| f == "seo_tools_new.mdx"),
+            "files={:?}",
+            summary.files
+        );
+        assert!(
+            summary.files.iter().any(|f| f == "000_seed.mdx"),
+            "files={:?}",
+            summary.files
+        );
+
+        let written_kw: Option<String> = conn
+            .query_row(
+                "SELECT target_keyword FROM articles WHERE project_id='proj1' AND file LIKE '%seo_tools_new.mdx'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(written_kw.as_deref(), Some("seo tools"));
+
+        let seed_kw: Option<String> = conn
+            .query_row(
+                "SELECT target_keyword FROM articles WHERE project_id='proj1' AND file LIKE '%000_seed.mdx'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            seed_kw.as_deref().unwrap_or("").is_empty(),
+            "seed must not inherit write-task keyword: {seed_kw:?}"
+        );
+        let seed_status: String = conn
+            .query_row(
+                "SELECT status FROM articles WHERE project_id='proj1' AND file LIKE '%000_seed.mdx'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(seed_status, "draft");
+
+        let _ = std::fs::remove_dir_all(&project_path);
+    }
+
+    /// Nested collision gate runs before keyword stamp: twin may exist as draft
+    /// without K, but never as a second live catalog owner of the keyword.
+    #[test]
+    fn ingest_content_write_files_collision_skips_keyword_stamp() {
+        let (conn, project_path) = nested_write_fixture();
+
+        conn.execute(
+            "INSERT INTO articles (
+                id, project_id, title, url_slug, file, status, target_keyword,
+                content_gaps_addressed, target_volume, word_count, review_count, content_hash,
+                page_type
+             ) VALUES (1, 'proj1', 'SEO Tools Hub', 'hub-seo-tools',
+                       './content/blog/hub_seo_tools.mdx', 'published', 'seo tools',
+                       '[]', 0, 100, 0, 'h', 'hub')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE articles_meta SET next_article_id = 2 WHERE project_id = 'proj1'",
+            [],
+        )
+        .unwrap();
+
+        std::fs::write(
+            project_path.join("content/blog/seo_tools_twin.mdx"),
+            "---\ntitle: SEO Tools Twin\ndescription: Twin body for nested collision gate before keyword stamp.\nslug: seo-tools-twin\ndate: \"2024-06-01\"\n---\n\n# SEO Tools Twin\n\nseo tools body.\n",
+        )
+        .unwrap();
+
+        let mut task = make_task();
+        task.id = "write-kw-collide".to_string();
+        task.task_type = "write_article".to_string();
+        task.project_id = "proj1".to_string();
+        task.description = Some(
+            "File: content/blog/seo_tools_twin.mdx\nTarget keyword: seo tools\nKD: 28\nVolume: 900"
+                .to_string(),
+        );
+
+        let err = ingest_content_write_files(&conn, &task, &project_path)
+            .expect_err("collision must fail closed");
+        assert!(
+            is_keyword_collision_error(&err),
+            "expected collision message, got: {err}"
+        );
+        assert!(err.contains("hub-seo-tools"), "must name collider: {err}");
+        assert!(
+            err.contains("Retarget") || err.contains("retarget") || err.contains("Consolidate"),
+            "resolution guidance: {err}"
+        );
+
+        let twin_kw: Option<String> = conn
+            .query_row(
+                "SELECT target_keyword FROM articles WHERE project_id='proj1' AND file LIKE '%seo_tools_twin.mdx'",
+                [],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        assert!(
+            twin_kw.as_deref().unwrap_or("").is_empty(),
+            "twin must not own colliding keyword: {twin_kw:?}"
+        );
+
+        // Twin may be present as draft without K (acceptable fail-closed state).
+        let twin_status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM articles WHERE project_id='proj1' AND file LIKE '%seo_tools_twin.mdx'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        if let Some(status) = twin_status {
+            assert_eq!(status, "draft");
+        }
+
+        // Owner hub still holds the keyword alone.
+        let owners: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM articles
+                 WHERE project_id='proj1' AND target_keyword IS NOT NULL
+                   AND TRIM(target_keyword) != ''",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(owners, 1, "exactly one live owner of any keyword");
+
+        let _ = std::fs::remove_dir_all(&project_path);
+    }

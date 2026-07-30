@@ -73,6 +73,98 @@ pub fn existing_keywords(conn: &Connection, project_id: &str) -> Result<HashSet<
     Ok(set)
 }
 
+/// Catalog article that already owns a given exact `target_keyword`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct KeywordCollider {
+    pub id: i64,
+    pub title: String,
+    pub url_slug: String,
+    pub page_type: Option<String>,
+    pub file: String,
+}
+
+/// Find catalog articles whose normalized `target_keyword` equals `keyword`.
+///
+/// Empty/whitespace keyword after [`crate::content::keyword_match::normalize_keyword`]
+/// returns an empty list (no collision gate). Optional `exclude_slug` /
+/// `exclude_article_id` skip the article being re-submitted or re-verified so
+/// self does not false-positive (issue #272).
+pub fn find_target_keyword_collisions(
+    conn: &Connection,
+    project_id: &str,
+    keyword: &str,
+    exclude_slug: Option<&str>,
+    exclude_article_id: Option<i64>,
+) -> Result<Vec<KeywordCollider>> {
+    let normalized = crate::content::keyword_match::normalize_keyword(keyword);
+    if normalized.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let exclude_slug_norm = exclude_slug
+        .map(|s| crate::content::slug::normalize_url_slug(s))
+        .filter(|s| !s.is_empty());
+
+    let articles = list_articles(conn, project_id)?;
+    let mut colliders = Vec::new();
+    for a in articles {
+        if let Some(id) = exclude_article_id {
+            if a.id == id {
+                continue;
+            }
+        }
+        if let Some(ref ex) = exclude_slug_norm {
+            let article_slug = crate::content::slug::normalize_url_slug(&a.url_slug);
+            if article_slug == *ex {
+                continue;
+            }
+        }
+        let Some(kw) = a.target_keyword.as_deref() else {
+            continue;
+        };
+        let other = crate::content::keyword_match::normalize_keyword(kw);
+        if other.is_empty() {
+            continue;
+        }
+        if other == normalized {
+            colliders.push(KeywordCollider {
+                id: a.id,
+                title: a.title,
+                url_slug: a.url_slug,
+                page_type: a.page_type,
+                file: a.file,
+            });
+        }
+    }
+    Ok(colliders)
+}
+
+/// Operator-facing resolution text for exact `target_keyword` collisions (issue #272).
+///
+/// Names collider identity and the two allowed fixes: retarget or consolidate.
+/// Does not auto-redirect, rewrite inbound, or spawn consolidate.
+pub fn format_keyword_collision_message(keyword: &str, colliders: &[KeywordCollider]) -> String {
+    let collider_list = colliders
+        .iter()
+        .map(|c| {
+            let page = c.page_type.as_deref().unwrap_or("unknown");
+            format!(
+                "id={} slug={} title=\"{}\" page_type={}",
+                c.id, c.url_slug, c.title, page
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "Exact target_keyword collision for \"{}\": already owned by [{}]. \
+         Resolve by (1) Retarget the existing article or this draft to a non-colliding keyword, or \
+         (2) Consolidate via cannibalization audit → approve consolidate_cluster with keep = intended winner \
+         and redirect the loser. Write registration will not create a silent hub/spoke twin.",
+        keyword.trim(),
+        collider_list
+    )
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Import / Export projection
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -563,5 +655,131 @@ mod tests {
         let json = std::fs::read_to_string(auto_dir.join("articles.json")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(doc["articles"].as_array().unwrap().len(), 1);
+    }
+
+    fn insert_article_with_keyword(
+        conn: &Connection,
+        id: i64,
+        project_id: &str,
+        slug: &str,
+        title: &str,
+        keyword: Option<&str>,
+        page_type: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO articles (
+                id, title, url_slug, file, target_keyword, status,
+                content_gaps_addressed, project_id, page_type
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'published', '[]', ?6, ?7)",
+            rusqlite::params![
+                id,
+                title,
+                slug,
+                format!("./content/{slug}.mdx"),
+                keyword,
+                project_id,
+                page_type,
+            ],
+        )
+        .unwrap();
+    }
+
+    /// Issue #272: exact normalized keyword match returns collider identity.
+    #[test]
+    fn find_target_keyword_collisions_matches_normalized_keyword() {
+        let conn = in_memory_db();
+        let dir = unique_temp_dir("ps_ai_kw_col");
+        setup_project(&conn, "p1", &dir);
+
+        insert_article_with_keyword(
+            &conn,
+            1,
+            "p1",
+            "hub-seo-tools",
+            "SEO Tools Hub",
+            Some("\"SEO Tools\""),
+            Some("hub"),
+        );
+        insert_article_with_keyword(
+            &conn,
+            2,
+            "p1",
+            "other",
+            "Other",
+            Some("different keyword"),
+            None,
+        );
+
+        let hits = find_target_keyword_collisions(&conn, "p1", "seo tools", None, None).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, 1);
+        assert_eq!(hits[0].url_slug, "hub-seo-tools");
+        assert_eq!(hits[0].title, "SEO Tools Hub");
+        assert_eq!(hits[0].page_type.as_deref(), Some("hub"));
+
+        let msg = format_keyword_collision_message("seo tools", &hits);
+        assert!(msg.contains("hub-seo-tools"), "msg={msg}");
+        assert!(msg.contains("Retarget"), "msg={msg}");
+        assert!(msg.contains("Consolidate") || msg.contains("consolidate_cluster"), "msg={msg}");
+    }
+
+    /// Issue #272: re-submit/re-verify of the same article does not false-positive.
+    #[test]
+    fn find_target_keyword_collisions_excludes_self_by_slug_and_id() {
+        let conn = in_memory_db();
+        let dir = unique_temp_dir("ps_ai_kw_self");
+        setup_project(&conn, "p1", &dir);
+
+        insert_article_with_keyword(
+            &conn,
+            10,
+            "p1",
+            "seo-tools",
+            "SEO Tools",
+            Some("seo tools"),
+            Some("spoke"),
+        );
+
+        let by_slug =
+            find_target_keyword_collisions(&conn, "p1", "seo tools", Some("seo-tools"), None)
+                .unwrap();
+        assert!(by_slug.is_empty(), "exclude_slug should skip self: {by_slug:?}");
+
+        let by_id =
+            find_target_keyword_collisions(&conn, "p1", "seo tools", None, Some(10)).unwrap();
+        assert!(by_id.is_empty(), "exclude_article_id should skip self: {by_id:?}");
+
+        // Different slug still collides.
+        let other =
+            find_target_keyword_collisions(&conn, "p1", "seo tools", Some("twin-slug"), None)
+                .unwrap();
+        assert_eq!(other.len(), 1);
+        assert_eq!(other[0].id, 10);
+    }
+
+    /// Issue #272: empty/whitespace keyword never trips the collision gate.
+    #[test]
+    fn find_target_keyword_collisions_empty_keyword_is_noop() {
+        let conn = in_memory_db();
+        let dir = unique_temp_dir("ps_ai_kw_empty");
+        setup_project(&conn, "p1", &dir);
+
+        insert_article_with_keyword(
+            &conn,
+            1,
+            "p1",
+            "owned",
+            "Owned",
+            Some("seo tools"),
+            None,
+        );
+
+        for empty in ["", "   ", "\"\"", "  \t  "] {
+            let hits = find_target_keyword_collisions(&conn, "p1", empty, None, None).unwrap();
+            assert!(
+                hits.is_empty(),
+                "empty keyword {empty:?} must not collide, got {hits:?}"
+            );
+        }
     }
 }
