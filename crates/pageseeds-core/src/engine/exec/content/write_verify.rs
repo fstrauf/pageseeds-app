@@ -44,13 +44,34 @@ pub(crate) fn exec_content_write_verify(
         crate::engine::exec::content::find_written_file(task, repo_root, Some(&content_dir));
 
     // Idempotent: registers anything the post-step ingestion missed (e.g. if
-    // it errored) and refreshes the articles.json projection.
+    // it errored) and refreshes the articles.json projection. Nested path gates
+    // exact keyword collision *before* stamping K (issue #272) — surface that
+    // as a hard fail rather than warning-and-continue.
     let mut ingest_note = String::new();
     match crate::engine::post_actions::ingest_content_write_files(conn, task, repo_root) {
         Ok(summary) if summary.ingested > 0 => {
             ingest_note = format!("; registered {} new file(s)", summary.ingested);
         }
         Ok(_) => {}
+        Err(e) if crate::engine::post_actions::is_keyword_collision_error(&e) => {
+            // Twin may exist as draft without K; never leave/accept a K twin.
+            if let Some(path) = written.as_ref() {
+                let fname = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                clear_article_keyword(conn, &task.project_id, fname);
+            }
+            let output = serde_json::to_string_pretty(&serde_json::json!({
+                "check": "target_keyword_unique",
+                "error": e,
+            }))
+            .ok();
+            return StepResult::fail_with_opt_output(
+                format!("Write verify failed target_keyword collision: {e}"),
+                output,
+            );
+        }
         Err(e) => log::warn!("[write_verify] orphan ingestion failed: {}", e),
     }
 
@@ -108,6 +129,9 @@ pub(crate) fn exec_content_write_verify(
             exclude_id,
         ) {
             Ok(colliders) if !colliders.is_empty() => {
+                // Prefer not leaving a second live catalog row with K after
+                // fail-closed verify (e.g. post-step stamped K before this gate).
+                clear_article_keyword(conn, &task.project_id, file_name);
                 let message =
                     crate::content::article_index::format_keyword_collision_message(kw, &colliders);
                 let output = serde_json::to_string_pretty(&serde_json::json!({
@@ -175,6 +199,20 @@ fn lookup_article_id(conn: &Connection, project_id: &str, filename: &str) -> Opt
         |row| row.get::<_, i64>(0),
     )
     .ok()
+}
+
+/// Clear keyword meta on a catalog row so a fail-closed collision does not leave
+/// a second live owner of K (issue #272 nested registration cleanup).
+fn clear_article_keyword(conn: &Connection, project_id: &str, filename: &str) {
+    if filename.is_empty() {
+        return;
+    }
+    let _ = conn.execute(
+        "UPDATE articles
+         SET target_keyword = NULL, keyword_difficulty = NULL, target_volume = 0
+         WHERE project_id = ?1 AND file LIKE ?2",
+        rusqlite::params![project_id, format!("%{filename}")],
+    );
 }
 
 fn structural_fail(report: &ValidateArticleResult, file_name: &str) -> StepResult {

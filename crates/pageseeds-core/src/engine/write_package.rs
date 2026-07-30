@@ -660,10 +660,10 @@ fn register_submitted_article(
         (None, None, 0i64)
     };
 
-    let has_keyword_meta = keyword.is_some() || kd_str.is_some() || vol != 0;
     // Keyword meta applies only to the submitted file — co-ingested orphans
     // (e.g. locator seed MDX) must not inherit K, or re-submit would false-
-    // positive the exact-keyword collision gate (issue #272).
+    // positive the exact-keyword collision gate (issue #272). Shared with
+    // nested `ingest_content_write_files` so the rule cannot drift.
     let submitted_basename = file_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -673,30 +673,19 @@ fn register_submitted_article(
     // Always demote newly ingested Path B articles to draft until CLI
     // `publish-content` (#257) — not only when keyword meta is present.
     if summary.ingested > 0 {
-        for filename in &summary.files {
-            let is_submitted = !submitted_basename.is_empty() && filename == submitted_basename;
-            if has_keyword_meta && is_submitted {
-                let _ = conn.execute(
-                    "UPDATE articles
-                     SET target_keyword=?1, keyword_difficulty=?2, target_volume=?3,
-                         status='draft'
-                     WHERE project_id=?4 AND file LIKE ?5",
-                    rusqlite::params![
-                        keyword.as_deref(),
-                        kd_str.as_deref(),
-                        vol,
-                        project_id,
-                        format!("%{filename}"),
-                    ],
-                );
+        crate::engine::post_actions::demote_ingested_to_draft_with_optional_keyword(
+            conn,
+            project_id,
+            &summary.files,
+            if submitted_basename.is_empty() {
+                None
             } else {
-                let _ = conn.execute(
-                    "UPDATE articles SET status='draft'
-                     WHERE project_id=?1 AND file LIKE ?2",
-                    rusqlite::params![project_id, format!("%{filename}")],
-                );
-            }
-        }
+                Some(submitted_basename)
+            },
+            keyword.as_deref(),
+            kd_str.as_deref(),
+            vol,
+        );
     }
 
     let _ = crate::content::article_index::export_projection(conn, project_id, project_path);
