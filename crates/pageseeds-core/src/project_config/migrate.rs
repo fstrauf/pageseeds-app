@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::reddit::config::{extract_query_keywords, parse_reddit_config};
-use crate::strategy::load_project_strategy;
+use crate::strategy::{parse_project_strategy, ProjectStrategy};
 
 use super::{
     load_project_config, project_config_path, save_project_config, ProjectConfig,
@@ -166,6 +166,10 @@ pub fn migrate_project_config(automation_dir: &Path, opts: MigrateOpts) -> Resul
 }
 
 /// Build a v1 [`ProjectConfig`] from legacy MD sources (no filesystem write).
+///
+/// Loads `project.md` via [`parse_project_strategy`] only — never
+/// [`crate::strategy::load_project_strategy`], which routes through
+/// [`crate::project_config::ensure_project_config`] and would recurse.
 fn assemble_from_legacy(automation_dir: &Path) -> (ProjectConfig, MigrateSources, Vec<String>) {
     let mut warnings = Vec::new();
     let mut sources = MigrateSources::default();
@@ -173,7 +177,11 @@ fn assemble_from_legacy(automation_dir: &Path) -> (ProjectConfig, MigrateSources
     let project_md_path = automation_dir.join("project.md");
     sources.project_md = project_md_path.exists();
 
-    let strategy = load_project_strategy(automation_dir);
+    // Pure MD parse for migrator only — do not call live strategy loaders.
+    let strategy = match std::fs::read_to_string(&project_md_path) {
+        Ok(content) => parse_project_strategy(&content),
+        Err(_) => ProjectStrategy::default(),
+    };
     if strategy.is_empty() {
         if sources.project_md {
             warnings.push(
