@@ -31,6 +31,7 @@ const EMBEDDED_SKILL_NAMES: &[&str] = &[
     "clarity-investigate",
     "content-fix-apply",
     "content-quality-review",
+    "content-refresh-apply",
     "content-write",
     "ctr-fix-apply",
     "ctr-optimization",
@@ -56,6 +57,9 @@ fn load_embedded_skill(skill_name: &str) -> Option<Skill> {
         "content-fix-apply" => include_str!("../../skills/content-fix-apply/SKILL.md"),
         "content-quality-review" => {
             include_str!("../../skills/content-quality-review/SKILL.md")
+        }
+        "content-refresh-apply" => {
+            include_str!("../../skills/content-refresh-apply/SKILL.md")
         }
         "content-write" => include_str!("../../skills/content-write/SKILL.md"),
         "ctr-fix-apply" => include_str!("../../skills/ctr-fix-apply/SKILL.md"),

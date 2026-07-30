@@ -30,11 +30,13 @@ use crate::models::ctr::CtrFixPatch;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-/// Fix pipeline kind (content SERP health vs CTR).
+/// Fix pipeline kind (content SERP health, decay refresh, or CTR).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FixKind {
     Content,
+    /// Impression-decay refresh Path B (#305) — same ContentFixPatch apply path.
+    Refresh,
     Ctr,
 }
 
@@ -42,9 +44,10 @@ impl FixKind {
     pub fn parse(s: &str) -> Result<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "content" => Ok(Self::Content),
+            "refresh" => Ok(Self::Refresh),
             "ctr" => Ok(Self::Ctr),
             other => Err(Error::Validation(format!(
-                "invalid fix kind '{other}' (expected content|ctr)"
+                "invalid fix kind '{other}' (expected content|ctr|refresh)"
             ))),
         }
     }
@@ -52,6 +55,7 @@ impl FixKind {
     pub fn skill_name(self) -> &'static str {
         match self {
             Self::Content => "content-fix-apply",
+            Self::Refresh => "content-refresh-apply",
             Self::Ctr => "ctr-fix-apply",
         }
     }
@@ -59,8 +63,14 @@ impl FixKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Content => "content",
+            Self::Refresh => "refresh",
             Self::Ctr => "ctr",
         }
+    }
+
+    /// Content and refresh share link-gate, ContentFixPatch, and outcome-review paths.
+    pub fn is_content_like(self) -> bool {
+        matches!(self, Self::Content | Self::Refresh)
     }
 }
 
@@ -268,6 +278,17 @@ fn constraints_for(kind: FixKind) -> FixConstraints {
             "cta".into(),
             "target_keyword".into(),
         ],
+        // Refresh: re-title + body-capable fields; no target_keyword retarget (#305).
+        FixKind::Refresh => vec![
+            "title".into(),
+            "h1".into(),
+            "description".into(),
+            "intro".into(),
+            "internal_links".into(),
+            "faq_questions".into(),
+            "eeat_signal".into(),
+            "cta".into(),
+        ],
         FixKind::Ctr => vec![
             "title".into(),
             "description".into(),
@@ -345,9 +366,9 @@ pub fn submit_fix(
         Error::Other(format!("Failed to read {}: {e}", file_path.display()))
     })?;
 
-    // Content kind: fail-closed on target-catalog load (CONTRACTS §13).
+    // Content/refresh: fail-closed on target-catalog load (CONTRACTS §13).
     // CTR kind: link gate stays OFF entirely.
-    let valid_link_targets = if kind == FixKind::Content {
+    let valid_link_targets = if kind.is_content_like() {
         Some(
             task_store::load_valid_link_targets(conn, project_id, project_path).map_err(|e| {
                 Error::Validation(format!(
@@ -362,7 +383,7 @@ pub fn submit_fix(
     // Optional structured patch apply (deterministic, no generate).
     if let Some(ref patch_json) = opts.patch_json {
         let patch_applied = match kind {
-            FixKind::Content => apply_content_patch(
+            FixKind::Content | FixKind::Refresh => apply_content_patch(
                 conn,
                 project_id,
                 project_path,
@@ -419,19 +440,32 @@ pub fn submit_fix(
             }
         }
 
-        // Path B content ships schedule +30d content_outcome_review (issue #203).
+        // Path B content/refresh schedule +30d content_outcome_review (issues #203 / #305).
         // CTR path records change events only — do not spawn content_outcome_review.
-        if kind == FixKind::Content {
+        if kind.is_content_like() {
+            let (parent_id_prefix, parent_task_type, title_label) = match kind {
+                FixKind::Refresh => (
+                    "path-b-fix-refresh",
+                    "fix_refresh_article",
+                    "Path B refresh fix",
+                ),
+                _ => (
+                    "path-b-fix-content",
+                    "fix_content_article",
+                    "Path B content fix",
+                ),
+            };
             let synthetic_parent = crate::models::task::Task {
-                id: format!("path-b-fix-content:{project_id}:{}", package.slug),
-                task_type: "fix_content_article".to_string(),
+                id: format!("{parent_id_prefix}:{project_id}:{}", package.slug),
+                task_type: parent_task_type.to_string(),
                 phase: "implementation".to_string(),
                 status: crate::models::task::TaskStatus::Done,
                 priority: crate::models::task::Priority::Medium,
                 run_policy: crate::models::task::TaskRunPolicy::UserEnqueue,
-                title: Some(format!("Path B content fix: {}", package.slug)),
+                title: Some(format!("{title_label}: {}", package.slug)),
                 description: Some(format!(
-                    "Path B fix-submit kind=content for {}",
+                    "Path B fix-submit kind={} for {}",
+                    kind.as_str(),
                     package.slug
                 )),
                 project_id: project_id.to_string(),
@@ -494,7 +528,7 @@ pub fn submit_fix(
             .any(|c| c.id == "internal_links_new_resolve" && !c.pass);
         // When pre == post, residual baseline is the already-written file: all
         // unresolvable /blog/ links hard-fail (agent full rewrite before submit).
-        if link_fail && kind == FixKind::Content && pre_content == content {
+        if link_fail && kind.is_content_like() && pre_content == content {
             Some(format!(
                 "Validation failed for {} — unresolvable /blog/ links hard-fail when the file is \
                  unchanged at fix-submit (no residual baseline for a full agent rewrite); fix \
@@ -718,7 +752,7 @@ fn resolve_fix_submit_target_keyword(
             return Some(t.to_string());
         }
     }
-    if kind != FixKind::Content {
+    if !kind.is_content_like() {
         return None;
     }
     if let Some(patch_json) = opts.patch_json.as_deref() {
@@ -940,8 +974,55 @@ Intro paragraph about cold brew makers for home use.
     #[test]
     fn fix_kind_parse() {
         assert_eq!(FixKind::parse("content").unwrap(), FixKind::Content);
+        assert_eq!(FixKind::parse("refresh").unwrap(), FixKind::Refresh);
         assert_eq!(FixKind::parse("CTR").unwrap(), FixKind::Ctr);
         assert!(FixKind::parse("other").is_err());
+        let err = FixKind::parse("other").unwrap_err().to_string();
+        assert!(err.contains("content|ctr|refresh"), "{err}");
+    }
+
+    #[test]
+    fn build_refresh_package_uses_refresh_skill() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            50,
+            "stale-guide",
+            "Stale Guide",
+            "content/stale.mdx",
+        );
+        write_mdx(
+            &project,
+            "content/stale.mdx",
+            &valid_mdx("Stale Guide", "Stale Guide", "Body for refresh package."),
+        );
+
+        let pkg = build_fix_package(
+            &conn,
+            "proj1",
+            &project_path,
+            "stale-guide",
+            FixKind::Refresh,
+            Some("Refresh decaying impressions"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(pkg.kind, FixKind::Refresh);
+        assert_eq!(pkg.skill.name, "content-refresh-apply");
+        assert!(!pkg.skill.content.is_empty(), "embedded refresh skill should load");
+        assert!(pkg.constraints.prefer_full_file);
+        assert!(pkg.constraints.allowed_change_fields.contains(&"title".into()));
+        assert!(pkg.constraints.allowed_change_fields.contains(&"intro".into()));
+        assert!(!pkg
+            .constraints
+            .allowed_change_fields
+            .contains(&"target_keyword".into()));
+        assert!(pkg.instructions.contains("refresh"));
     }
 
     #[test]
@@ -2196,6 +2277,79 @@ Intro paragraph about cold brew makers for home use.
             .find(|c| c.id == "internal_links_new_resolve")
             .expect("link check present");
         assert!(link_check.pass);
+    }
+
+    /// Issue #305: fix-submit kind=refresh spawns +30d content_outcome_review.
+    #[test]
+    fn submit_refresh_spawns_content_outcome_review() {
+        let conn = in_memory_db();
+        let project = temp_project();
+        let project_path = project.to_string_lossy().to_string();
+        insert_project(&conn, "proj1", &project_path);
+        insert_article(
+            &conn,
+            "proj1",
+            51,
+            "refresh-outcome",
+            "Refresh Outcome",
+            "content/refresh-outcome.mdx",
+        );
+        write_mdx(
+            &project,
+            "content/refresh-outcome.mdx",
+            &valid_mdx(
+                "Refresh Outcome",
+                "Refresh Outcome",
+                "Body for refresh fix closed-loop.",
+            ),
+        );
+
+        let result = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "refresh-outcome",
+            FixKind::Refresh,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result.validation);
+        assert_eq!(result.follow_up_task_ids.len(), 1);
+        let review =
+            crate::engine::task_store::get_task(&conn, &result.follow_up_task_ids[0]).unwrap();
+        assert_eq!(review.task_type, "content_outcome_review");
+        let art = review
+            .artifacts
+            .iter()
+            .find(|a| a.key == "content_outcome_target")
+            .expect("content_outcome_target");
+        let v: serde_json::Value =
+            serde_json::from_str(art.content.as_deref().unwrap_or("{}")).unwrap();
+        assert_eq!(v["slug"].as_str(), Some("refresh-outcome"));
+        assert_eq!(
+            v["parent_task_id"].as_str(),
+            Some("path-b-fix-refresh:proj1:refresh-outcome")
+        );
+
+        // Idempotent re-submit
+        let result2 = submit_fix(
+            &conn,
+            "proj1",
+            &project_path,
+            "refresh-outcome",
+            FixKind::Refresh,
+            FixSubmitOpts::default(),
+        )
+        .unwrap();
+        assert!(result2.ok);
+        let reviews: Vec<_> = crate::engine::task_store::list_tasks(&conn, "proj1")
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.task_type == "content_outcome_review")
+            .collect();
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].id, result.follow_up_task_ids[0]);
     }
 
     /// Issue #203: fix-submit kind=content spawns +30d content_outcome_review.

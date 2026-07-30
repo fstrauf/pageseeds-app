@@ -518,7 +518,7 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 
 | Tool | Role |
 |------|------|
-| `site-overview` | Compact weekly desk entry: totals, top pages, movers, freshness, hints, plus `zero_impression` / `striking_distance` / `hard_cannibalization` inventory (#204), `redirect_equity` / `non_catalog_gsc` residual inventory (#261), and `outcomes` aggregates (#302) |
+| `site-overview` | Compact weekly desk entry: totals, top pages, movers, freshness, hints, plus `zero_impression` / `striking_distance` / `hard_cannibalization` inventory (#204), `redirect_equity` / `non_catalog_gsc` residual inventory (#261), `declining_pages` impression-decay inventory (#305), and `outcomes` aggregates (#302) |
 | `ctr-outcomes` | CTR closed-loop measure: deploy-verify + classify ready `ctr_outcomes` + report rollup (#302). Free desk tool; not a task type. |
 | `articles` | GSC-aware catalog list (filters: status, min impressions, period) |
 | `article` | Full package for one slug: frontmatter, body outline, top queries, neighbors (`-S`/`--slug`) |
@@ -529,7 +529,7 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 | `create-task` / `execute-task` | Act within may-create + budgets |
 | Selection cmds | `select-keywords`, `select-cannibalization`, `select-content-review`, `create-reddit-replies`, `update-task-status` |
 | Path B write | `write-context` / `write-submit` → `publish-content -S` — outer-agent prose after keyword selection (preferred CLI path); submit leaves catalog draft; publish is explicit (#257); successful submit schedules +30d `content_outcome_review` (#203) |
-| Path B fix | `fix-context` / `fix-submit` — preferred targeted content/CTR edits; content kind schedules +30d outcome review; CTR records `ctr_outcomes` only |
+| Path B fix | `fix-context` / `fix-submit` — preferred targeted content/CTR/refresh edits; content + refresh kinds schedule +30d outcome review; CTR records `ctr_outcomes` only |
 | Path B merge | `merge-context` / `merge-submit` — outer-agent merge after approved keep+redirects; successful submit schedules keeper outcome review (#203) |
 
 #### Behavioral desk (default — not GSC substitute)
@@ -568,7 +568,7 @@ tool without a new hypothesis.
 
 Priors from desk data including first-class overview inventory fields
 (`zero_impression`, `striking_distance`, `hard_cannibalization` — #204;
-`redirect_equity`, `non_catalog_gsc` — #261).
+`redirect_equity`, `non_catalog_gsc` — #261; `declining_pages` — #305).
 **Do not** require DataForSEO, Clarity, Reddit, full `ctr_audit`, full
 `indexing_health_campaign`, or `content_review` as strategy brain for these
 signals. Empty or `degraded_reason` (e.g. `gsc_missing`) is not a force create.
@@ -587,7 +587,7 @@ signals. Empty or `degraded_reason` (e.g. `gsc_missing`) is not a force create.
 | Desk insufficient across levers | Optional `seo_health_scan` (not default) |
 | Reddit configured + capacity | `reddit_opportunity_search` |
 
-##### `site-overview` inventory signals (#204 / #261)
+##### `site-overview` inventory signals (#204 / #261 / #305)
 
 Always read these on overview. Optional priors only — never mandatory creates
 every week.
@@ -596,6 +596,7 @@ every week.
 |---------|------------|
 | High `zero_impression` count / sample (and not degraded) | Optional: cache-first dead-weight path ([below](#dead-weight--winnability-secondary)) — **not** mandatory; never weekly re-score loop |
 | `striking_distance` count / sample (pos ~7–13 + meaningful impr) | See **[Striking-distance preferred path](#striking-distance-preferred-path)** — ≤2 creates; overview sample first; fallback filter only if needed; **not** mandatory |
+| `declining_pages` count / sample (≥40% impr drop, prior ≥500) | Optional prior only — never mandatory create. When acting: Path B `fix-context -k refresh` + `fix-submit -k refresh` on high-loss slugs (cite drop_pct / deltas); do **not** auto-enqueue |
 | `hard_cannibalization` samples (and not degraded) | Optional scoped `cannibalization_audit` **only with hard multi-URL query evidence** — soft clusters still non-authority |
 | `redirect_equity` sample (residual GSC on 301 sources → destinations) | After merges: attribute residual landings to keepers before ignoring source URLs; cite source/dest impressions in report — **not** auto-merge |
 | `non_catalog_gsc` sample (high-impr never-catalog pages) | Note residual demand outside live catalog; investigate map gaps or content opportunities — do **not** invent keepers without evidence |
@@ -858,7 +859,7 @@ leftovers → fail once continue (≤1 retry) → resolve `review` mechanically.
 - Path B `write-submit` → marks write task done + spawns `cluster_and_link` +
   schedules +30d `content_outcome_review` (GSC closed-loop; #203); catalog stays
   **draft** until `publish-content -S <slug>` (#257)
-- Path B `fix-submit -k content` → schedules +30d `content_outcome_review`;
+- Path B `fix-submit -k content` or `-k refresh` → schedules +30d `content_outcome_review`;
   `-k ctr` → sparse `ctr_outcomes` change event only (no content outcome review)
 - Path B `merge-submit` → keeper redirects applied + schedules keeper
   `content_outcome_review`
@@ -945,10 +946,10 @@ pageseeds-cli publish-content -i <id> -p <path> -S <slug>
 Preferred for targeted content/CTR edits with full file context:
 
 ```bash
-pageseeds-cli fix-context -i <id> -p <path> -S <slug> -k content|ctr [-g goals]
+pageseeds-cli fix-context -i <id> -p <path> -S <slug> -k content|ctr|refresh [-g goals]
 # session agent edits full file using package
-pageseeds-cli fix-submit -i <id> -p <path> -S <slug> -k content|ctr [--file mdx]
-# → content: +30d content_outcome_review scheduled
+pageseeds-cli fix-submit -i <id> -p <path> -S <slug> -k content|ctr|refresh [--file mdx]
+# → content|refresh: +30d content_outcome_review scheduled
 # → ctr: ctr_outcomes change event only (measure later via ctr-outcomes)
 ```
 

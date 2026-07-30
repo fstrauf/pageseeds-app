@@ -1119,6 +1119,214 @@ fn striking_distance_inclusion_and_exclusion_band() {
     let _ = fs::remove_dir_all(&project);
 }
 
+// ── Issue #305: declining_pages inventory ────────────────────────────────────
+
+#[test]
+fn declining_pages_drop_pct_threshold_edges() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    // Exactly 40% drop (prev 1000 → recent 600) → included.
+    insert_article(
+        &conn, "proj1", 1, "exact-40", "Exact 40", "content/e.mdx", "published", 100,
+    );
+    // Below 40% drop (prev 1000 → recent 610 = 39%) → excluded.
+    insert_article(
+        &conn, "proj1", 2, "below-40", "Below 40", "content/b.mdx", "published", 100,
+    );
+    // Above 40% drop (prev 1000 → recent 500 = 50%) → included.
+    insert_article(
+        &conn, "proj1", 3, "above-40", "Above 40", "content/a.mdx", "published", 100,
+    );
+
+    let (r1, _) = recent_dates();
+    let (p1, _) = previous_dates();
+    let rows = vec![
+        daily_row("https://example.com/blog/exact-40", &r1, 5.0, 600.0),
+        daily_row("https://example.com/blog/exact-40", &p1, 10.0, 1000.0),
+        daily_row("https://example.com/blog/below-40", &r1, 5.0, 610.0),
+        daily_row("https://example.com/blog/below-40", &p1, 10.0, 1000.0),
+        daily_row("https://example.com/blog/above-40", &r1, 3.0, 500.0),
+        daily_row("https://example.com/blog/above-40", &p1, 10.0, 1000.0),
+    ];
+    crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.declining_pages.count, 2);
+    let slugs: Vec<&str> = overview
+        .declining_pages
+        .sample
+        .iter()
+        .map(|s| s.slug.as_str())
+        .collect();
+    // Sorted by impressions_delta ascending (largest losses first).
+    // above-40: -500, exact-40: -400
+    assert_eq!(slugs, vec!["above-40", "exact-40"]);
+    let exact = overview
+        .declining_pages
+        .sample
+        .iter()
+        .find(|s| s.slug == "exact-40")
+        .unwrap();
+    assert!((exact.drop_pct - 0.40).abs() < 1e-9);
+    assert!(overview
+        .hints
+        .iter()
+        .any(|h| h == "Declining-impression pages present"));
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn declining_pages_prev_impressions_floor() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    // prev < 500 even with huge drop → excluded.
+    insert_article(
+        &conn, "proj1", 1, "below-floor", "Below Floor", "content/f.mdx", "published", 100,
+    );
+    // prev exactly 500 + 40% drop → included.
+    insert_article(
+        &conn, "proj1", 2, "at-floor", "At Floor", "content/a.mdx", "published", 100,
+    );
+    // prev > 500 + drop → included.
+    insert_article(
+        &conn, "proj1", 3, "above-floor", "Above Floor", "content/x.mdx", "published", 100,
+    );
+
+    let (r1, _) = recent_dates();
+    let (p1, _) = previous_dates();
+    let rows = vec![
+        // 499 prev, 0 recent = ~100% drop but below floor
+        daily_row("https://example.com/blog/below-floor", &r1, 0.0, 0.0),
+        daily_row("https://example.com/blog/below-floor", &p1, 5.0, 499.0),
+        // 500 prev, 300 recent = 40% drop
+        daily_row("https://example.com/blog/at-floor", &r1, 2.0, 300.0),
+        daily_row("https://example.com/blog/at-floor", &p1, 10.0, 500.0),
+        // 1000 prev, 400 recent = 60% drop
+        daily_row("https://example.com/blog/above-floor", &r1, 1.0, 400.0),
+        daily_row("https://example.com/blog/above-floor", &p1, 20.0, 1000.0),
+    ];
+    crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.declining_pages.count, 2);
+    let slugs: Vec<&str> = overview
+        .declining_pages
+        .sample
+        .iter()
+        .map(|s| s.slug.as_str())
+        .collect();
+    assert!(!slugs.contains(&"below-floor"));
+    assert_eq!(slugs, vec!["above-floor", "at-floor"]);
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn declining_pages_empty_without_prior_window() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(
+        &conn, "proj1", 1, "only-recent", "Only Recent", "content/o.mdx", "published", 100,
+    );
+
+    let (d1, _) = recent_dates();
+    crate::db::insert_gsc_page_daily_snapshots(
+        &conn,
+        "proj1",
+        &[daily_row(
+            "https://example.com/blog/only-recent",
+            &d1,
+            5.0,
+            1000.0,
+        )],
+    )
+    .unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.declining_pages.count, 0);
+    assert!(overview.declining_pages.sample.is_empty());
+    assert!(
+        !overview
+            .hints
+            .iter()
+            .any(|h| h == "Declining-impression pages present")
+    );
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+#[test]
+fn declining_pages_sort_and_sample_cap() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+
+    // 12 declining pages: prev 1000, recent = 600 - i*30 so all drop ≥ 40%.
+    // i=0: recent 600, delta -400; i=11: recent 270, delta -730
+    for i in 0..12 {
+        let slug = format!("dec-{i:02}");
+        insert_article(
+            &conn,
+            "proj1",
+            (i + 1) as i64,
+            &slug,
+            &format!("Dec {i}"),
+            &format!("content/d{i}.mdx"),
+            "published",
+            100,
+        );
+    }
+
+    let (r1, _) = recent_dates();
+    let (p1, _) = previous_dates();
+    let mut rows = Vec::new();
+    for i in 0..12 {
+        let slug = format!("dec-{i:02}");
+        let recent_impr = 600.0 - (i as f64) * 30.0;
+        rows.push(daily_row(
+            &format!("https://example.com/blog/{slug}"),
+            &r1,
+            1.0,
+            recent_impr,
+        ));
+        rows.push(daily_row(
+            &format!("https://example.com/blog/{slug}"),
+            &p1,
+            10.0,
+            1000.0,
+        ));
+    }
+    crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.declining_pages.count, 12);
+    assert_eq!(
+        overview.declining_pages.sample.len(),
+        OVERVIEW_INVENTORY_SAMPLE_CAP
+    );
+    // Largest losses first: dec-11 (delta -730), dec-10 (-700), …
+    assert_eq!(overview.declining_pages.sample[0].slug, "dec-11");
+    assert_eq!(overview.declining_pages.sample[1].slug, "dec-10");
+    assert!(
+        overview.declining_pages.sample[0].impressions_delta
+            < overview.declining_pages.sample[1].impressions_delta
+    );
+    // Sample last is 10th-worst: dec-02 (delta -460).
+    assert_eq!(overview.declining_pages.sample[9].slug, "dec-02");
+
+    let _ = fs::remove_dir_all(&project);
+}
+
 #[test]
 fn hard_cannibalization_multi_url_same_query() {
     let conn = in_memory_db();

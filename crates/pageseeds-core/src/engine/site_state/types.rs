@@ -15,7 +15,7 @@ pub const BODY_SIZE_CAP: usize = 40_000;
 pub const BODY_TRUNCATION_NOTE: &str =
     "\n\n<!-- truncated: body continues beyond size cap -->";
 
-// ── site_overview desk inventory thresholds (issues #204 / #205) ──────────────
+// ── site_overview desk inventory thresholds (issues #204 / #205 / #305) ───────
 
 /// Inclusive lower bound of avg position for striking-distance inventory.
 pub const STRIKING_POS_MIN: f64 = 7.0;
@@ -24,10 +24,16 @@ pub const STRIKING_POS_MAX: f64 = 13.0;
 /// Minimum recent-window impressions for striking-distance inventory.
 pub const STRIKING_MIN_IMPRESSIONS: f64 = 200.0;
 
+/// Minimum prior-window impressions for declining-pages inventory (#305).
+pub const DECLINING_MIN_PREV_IMPRESSIONS: f64 = 500.0;
+/// Inclusive lower bound of impression drop fraction (prev→recent) for declining pages.
+/// `drop_pct = (prev - recent) / prev`; pages at or above this fraction are included.
+pub const DECLINING_IMPRESSIONS_DROP_PCT: f64 = 0.40;
+
 // Hard same-query floor/cap live in `db::ctr_query` (shared with cannibalization
 // audit): `SHARED_QUERY_MIN_IMPRESSIONS` / `SHARED_QUERY_MAX_PAGES`.
 /// Sample size cap shared by zero-impression, striking-distance, hard-cannibal,
-/// redirect-equity, and non-catalog GSC inventory groups.
+/// redirect-equity, non-catalog GSC, and declining-pages inventory groups.
 pub const OVERVIEW_INVENTORY_SAMPLE_CAP: usize = 10;
 
 /// Minimum recent-window impressions for non-catalog residual GSC inventory (#261).
@@ -54,6 +60,8 @@ pub struct SiteOverview {
     pub redirect_equity: RedirectEquityInventory,
     /// High-impression GSC pages outside live catalog and redirect map (#261).
     pub non_catalog_gsc: NonCatalogGscInventory,
+    /// Live articles with significant impression decay (28d recent vs prior) (#305).
+    pub declining_pages: DecliningPagesInventory,
     /// Closed-loop outcome aggregates from content + CTR tables (#302).
     pub outcomes: OutcomesInventory,
     /// Deterministic flag strings only (no soft-cluster prose).
@@ -115,6 +123,28 @@ pub struct StrikingDistanceSample {
     pub avg_position: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ctr: Option<f64>,
+}
+
+/// Live articles with ≥40% impression drop and prior-window floor (#305).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DecliningPagesInventory {
+    pub count: usize,
+    pub sample: Vec<DecliningPagesSample>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecliningPagesSample {
+    pub slug: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub prev_impressions: f64,
+    pub recent_impressions: f64,
+    /// `recent - prev` (negative for losses).
+    pub impressions_delta: f64,
+    /// `(prev - recent) / prev` when prev > 0.
+    pub drop_pct: f64,
+    /// `recent_clicks - prev_clicks`.
+    pub clicks_delta: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
