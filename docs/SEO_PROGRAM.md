@@ -1,7 +1,7 @@
 # SEO program ops (`seo_program.yaml`)
 
 Operator guide for the **90-day SEO operating layer**: mode rotation, Primary /
-harvest / tools queues, and conversion-oriented metrics.
+harvest / tools / prune queues, and conversion-oriented metrics.
 
 > **Not** a second content-strategy SOT. Theme gates stay in
 > [project.yaml](./PROJECT_MD_STRATEGY.md) (`ProjectConfig` / `pageseeds-cli strategy`).
@@ -69,6 +69,14 @@ tools_queue:
   - path_or_slug: /covered-call-scanner
     status: open
     notes: optional
+prune_queue:                         # optional; ≤15 open rows; monthly producer → weekly drain
+  - slug: thin-drift-post            # or url: /blog/...
+    cluster: tax                     # LEGACY / do_not_expand cluster name when known
+    action: merge_into:keeper-slug   # merge_into:<keeper-slug> | noindex
+    evidence: "104k imp/90d, 0 clicks"  # GSC (or desk) window evidence — required
+    status: open                     # open | in_progress | done | dropped  (no measuring for noindex; merge may use measuring after submit)
+    confirm: required                # MANDATORY on every noindex row; optional/omit for merge_into
+    notes: optional
 cluster_policy_hints:                # advisory for monthly review; project.yaml is gate SOT
   - name: "Cluster name matching project.yaml"
     preferred_status: maintain       # active | maintain | legacy | planned
@@ -93,6 +101,11 @@ attract/harvest/tools. **Non-compliant only if** ≥1 due and zero executed;
 when due >2, remainder is **deferred under cap** (still compliant). “None due”
 after filter is fine.
 
+**Prune drain (side-pass, any mode):** When `prune_queue` has open rows, weekly
+may drain them as a side-pass within ≤5 creates / ≤15 exec budgets — not a new
+`current_mode` value. Prefer `merge_into` via existing Path B merge; never
+auto-execute `noindex` (see below).
+
 ### Queue statuses
 
 | Status | Meaning |
@@ -108,6 +121,34 @@ after filter is fine.
 must match (or be a deliberate subset of) `project.yaml` →
 `search_keywords.primary`. Expansion bans still come from `do_not_expand` +
 LEGACY clusters.
+
+### `prune_queue` (optional, schema v1)
+
+- **Purpose:** turn LEGACY / `do_not_expand` inventory into concrete per-URL
+  actions (shrink blocked territory). Theme gates still live in `project.yaml`;
+  this queue is ops only.
+- **Cap:** ≤15 open rows (thin board, same spirit as other queues).
+- **Row fields:**
+  - `slug` (preferred) or `url`
+  - `cluster` (optional name matching `project.yaml`)
+  - `action` = `merge_into:<keeper-slug>` **or** `noindex`
+  - `evidence` (required string with GSC/desk numbers)
+  - `status` = `open | in_progress | done | dropped` (and for **merge rows
+    only**, `measuring` when +30d `content_outcome_review` is scheduled after
+    merge-submit — same pattern as other queues)
+  - `confirm: required` — **mandatory for every noindex row**; optional/omit
+    for `merge_into`
+  - short `notes` optional
+- **Hard rule:** noindex rows are **never** auto-executed by skills or CLI.
+  They are operator-manual only. `confirm: required` is the schema signal;
+  weekly-seo surfaces them under Needs your decision / manual checklist.
+- **`merge_into` rows:** weekly drains via existing Path B `merge-context` →
+  session MDX → `merge-submit` (human confirm thresholds already in merge
+  package: `MIN_KEEPER_WORDS`, `HUMAN_CONFIRM_CLICKS` / `IMPRESSIONS`).
+  Successful merge-submit already spawns `content_outcome_review` (+30d) —
+  no new task type.
+- Do **not** invent keep-with-harvest-CTA here — that is `harvest_queue`.
+- **Producer:** `/seo-program-review` (Prune scan). **Consumer:** `/weekly-seo`.
 
 ---
 

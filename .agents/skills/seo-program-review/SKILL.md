@@ -19,7 +19,8 @@ metadata:
 # SEO program review — monthly rebalance (skill + CLI desk)
 
 > **Layering:** `project.yaml` = theme gates (what we may expand).  
-> `seo_program.yaml` = ops (goal, metrics, mode, queues).  
+> `seo_program.yaml` = ops (goal, metrics, mode, primary / harvest / tools /
+> prune queues).  
 > This skill **produces/updates** those files. `/weekly-seo` **consumes** them.  
 > Schema: [docs/SEO_PROGRAM.md](../../../docs/SEO_PROGRAM.md).
 
@@ -87,6 +88,7 @@ and re-open the customer project. Strategy file edits in the content repo are fi
 | 7 | **Report file:** `seo_program_review_{YYYYMMDD_HHMMSS}.md` under `.github/automation/`. |
 | 8 | Prefer **human confirm** before demoting high-impression pillars to LEGACY (use MAINTAIN). |
 | 9 | Do **not** use `content_review` task as strategy brain. Desk + product read + judgment. |
+| 10 | **Noindex never agent-executed.** Every `prune_queue` noindex row must have `confirm: required` and appear under report **Needs your decision**. Skills/CLI never bulk deindex. |
 
 ---
 
@@ -174,18 +176,49 @@ Produce a short plan:
 2. Metrics list (keep/edit)
 3. Cluster status changes in `project.yaml` (table: before → after + why)
 4. Primary list tweaks / `do_not_expand` additions (only with evidence of drift)
-5. Rebuilt `primary_backlog` / `harvest_queue` / `tools_queue` (≤15 open items each — thin board)
+5. Rebuilt `primary_backlog` / `harvest_queue` / `tools_queue` / `prune_queue` (≤15 open items each — thin board)
 6. `current_mode` + `mode_mix_this_month` for the next 30 days
 7. Product gaps that SEO cannot fix (activation, UI)
 
 Interactive: get approval on cluster demotions / Primary cuts. Hands-off: state
 plan then write, flag aggressive LEGACY demotions under Needs decision.
 
+### 5b. Prune scan (LEGACY / do_not_expand inventory → per-URL actions)
+
+Cross strategy LEGACY clusters + `do_not_expand` keywords with desk package:
+
+- `strategy` (cluster statuses, `do_not_expand`)
+- `gsc-performance` / `site-overview` / `articles` (impr, clicks, indexing)
+- optional dead-weight / winnability scores when available
+  (`score-zero-impression-articles --from-cache`) — secondary only
+
+Emit ≤15 **open** `prune_queue` rows. Prefer high-impr blocked territory and
+thin drift (e.g. tax drafts on `do_not_expand`, income/dividend LEGACY with
+near-zero clicks).
+
+For each row choose:
+
+- `action: merge_into:<keeper-slug>` when a clear keeper exists (hard cannibal /
+  thin dupe / same-intent stronger URL)
+- `action: noindex` when no keeper and page is pure drag — **must** set
+  `confirm: required` and list under report **Needs your decision**
+
+Evidence required on every row (GSC window string). Preserve useful
+`in_progress` / `done` / `measuring` rows when rewriting YAML.
+
+**Hard bans for this step:**
+
+- No mass MDX rewrites
+- No CLI noindex / bulk deindex execution
+- No new task types
+
 ### 6. Write YAML
 
 #### `seo_program.yaml`
 
-- Full schema v1 rewrite is OK if queues are stale; preserve useful `measuring` rows
+- Full schema v1 rewrite is OK if queues are stale; preserve useful `measuring`
+  rows (including merge prune rows still measuring after merge-submit)
+- Include rebuilt `prune_queue` (≤15 open; every noindex has `confirm: required`)
 - Set `last_reviewed_at` to today (ISO date)
 - Set `current_mode` to the **next** weekly default
 - Keep `schema_version: 1`
@@ -240,6 +273,12 @@ truly abandoned.
 - Primary backlog: N open / measuring / done
 - Harvest: …
 - Tools: …
+- Prune: N open merge_into / N noindex needing confirm
+
+## Prune
+- Open `merge_into`: n (list key slugs → keepers)
+- Open `noindex` (confirm required): n — see Needs your decision
+- Measuring / done preserved: …
 
 ## Metrics scoreboard (direction only this pass)
 | Metric | Source | Signal |
@@ -248,6 +287,7 @@ truly abandoned.
 …
 
 ## Needs your decision
+- Include every open prune `noindex` row (slug + evidence + `confirm: required`)
 …
 
 ## Product gaps (not SEO)
@@ -269,13 +309,13 @@ truly abandoned.
 
 **YAML:** seo_program.yaml updated; project.yaml {changed|unchanged}
 
-**Primary open:** n · **Harvest open:** n · **Tools open:** n
+**Primary open:** n · **Harvest open:** n · **Tools open:** n · **Prune open:** n merge_into / n noindex
 
-**Needs decision:** …
+**Needs decision:** … (include noindex prune rows)
 
 **Report:** {path}
 
-**Next:** /weekly-seo (consumes mode) · re-review in ~{review_cadence_days}d
+**Next:** /weekly-seo (consumes mode + queues incl. prune) · re-review in ~{review_cadence_days}d
 ```
 
 ---
@@ -291,6 +331,9 @@ If `seo_program.yaml` is missing:
 4. Seed harvest from top GSC pages that are edu-heavy with weak product path
    (≤10 rows).
 5. Seed tools from public tool routes + commercial landing pages.
+6. Optionally seed `prune_queue` from LEGACY / `do_not_expand` inventory when
+   GSC evidence exists (≤10 open rows); else empty list. Every noindex seed
+   must have `confirm: required`.
 
 ---
 
@@ -304,6 +347,7 @@ If `seo_program.yaml` is missing:
 | LEGACY on high-impr pillars for purity | MAINTAIN + harvest |
 | Invent conversion metrics | PostHog schema or WARN |
 | Edit pageseeds-app mid-run | Report product/CLI gaps |
+| Agent-executed noindex / bulk deindex from prune scan | Queue `noindex` with `confirm: required` + Needs your decision only |
 
 ---
 
