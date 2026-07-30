@@ -127,11 +127,16 @@ pub fn load_reddit_config(automation_dir: &Path) -> Result<RedditProjectConfig, 
 
 /// Parse `reddit_config.md` content into a `RedditProjectConfig`.
 pub fn parse_reddit_config(content: &str) -> RedditProjectConfig {
+    let mut seed_subreddits = extract_subreddits(content, "Seed Subreddits");
+    // Common alias in customer configs (Brewedlate, etc.) — same list, different heading.
+    if seed_subreddits.is_empty() {
+        seed_subreddits = extract_subreddits(content, "Target Subreddits");
+    }
     RedditProjectConfig {
         product_name: extract_product_name(content),
         mention_stance: extract_mention_stance(content),
         trigger_topics: extract_list_section(content, "Trigger Topics"),
-        seed_subreddits: extract_subreddits(content, "Seed Subreddits"),
+        seed_subreddits,
         excluded_subreddits: extract_subreddits(content, "Excluded Subreddits"),
     }
 }
@@ -170,6 +175,25 @@ fn extract_product_name(content: &str) -> Option<String> {
                 if !v.is_empty() {
                     return Some(v);
                 }
+            }
+        }
+    }
+
+    // Fallback: H1 title forms used by templates / real customer files
+    // e.g. "# Reddit Config: Brewedlate" or "# Brewedlate"
+    for line in content.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("# ") {
+            if rest.starts_with('#') {
+                continue; // ## heading
+            }
+            let name = rest
+                .strip_prefix("Reddit Config:")
+                .or_else(|| rest.strip_prefix("Reddit Configuration:"))
+                .unwrap_or(rest)
+                .trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
             }
         }
     }
@@ -386,11 +410,35 @@ mod tests {
         assert_eq!(cfg.product_name, Some("MyApp".to_string()));
     }
 
-    /// Deterministic parser doesn't handle H1 titles — agentic parse is the primary path.
     #[test]
-    fn product_name_none_when_only_h1_title() {
+    fn product_name_from_reddit_config_h1_title() {
         let cfg = parse_reddit_config("# Reddit Config: PageSeeds\n\n## Trigger Topics\n- foo\n");
-        assert_eq!(cfg.product_name, None);
+        assert_eq!(cfg.product_name, Some("PageSeeds".to_string()));
+    }
+
+    #[test]
+    fn product_name_from_bare_h1() {
+        let cfg = parse_reddit_config("# Brewedlate\n\n## Trigger Topics\n- foo\n");
+        assert_eq!(cfg.product_name, Some("Brewedlate".to_string()));
+    }
+
+    #[test]
+    fn seed_subreddits_accepts_target_subreddits_alias() {
+        // Customer files often use Target Subreddits (Brewedlate) instead of Seed.
+        let md = r#"
+# Reddit Config: Brewedlate
+
+## Target Subreddits
+- r/Coffee
+- r/roasting
+- r/espresso
+
+## Trigger Topics
+- home roasting
+"#;
+        let cfg = parse_reddit_config(md);
+        assert_eq!(cfg.seed_subreddits, vec!["coffee", "roasting", "espresso"]);
+        assert_eq!(cfg.product_name, Some("Brewedlate".to_string()));
     }
 
     /// Deterministic parser doesn't strip bold markdown — agentic parse is the primary path.
