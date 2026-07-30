@@ -108,6 +108,33 @@ pub fn collect_config_file_statuses(
         });
     }
 
+    // Typed project config (project.yaml) — optional inventory row (#291)
+    {
+        let path = automation_dir.join("project.yaml");
+        let (full_path, full_link) = path_strings(&path);
+        let configured = path.exists() && file_has_non_whitespace_content(&path);
+        let detail = if !path.exists() {
+            "Optional file missing — migrate with pageseeds-cli migrate-project-config -p ."
+                .to_string()
+        } else if configured {
+            "Present".to_string()
+        } else {
+            "File is empty".to_string()
+        };
+        files.push(ProjectConfigFileStatus {
+            id: "project_yaml".to_string(),
+            category: "context".to_string(),
+            label: "Project config (YAML)".to_string(),
+            relative_path: ".github/automation/project.yaml".to_string(),
+            full_path,
+            full_link,
+            used_by: "Typed project strategy + reddit config (schema v1)".to_string(),
+            required: false,
+            configured,
+            detail,
+        });
+    }
+
     // Shared context / sentiment style files (consolidated project.md)
     {
         let path = automation_dir.join("project.md");

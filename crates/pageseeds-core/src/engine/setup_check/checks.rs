@@ -180,6 +180,22 @@ pub(crate) fn check_optional_config_files(automation_dir: &Path, checks: &mut Ve
         });
     }
 
+    // Legacy MD present but typed project.yaml not yet written (#291)
+    let project_yaml = automation_dir.join("project.yaml");
+    if !project_yaml.exists() && (project_md.exists() || reddit_config.exists()) {
+        checks.push(SetupCheckItem {
+            id: "project_config_needs_migration".into(),
+            severity: Severity::Warn,
+            title: "Project config not migrated to project.yaml".into(),
+            detail: "Legacy project.md / reddit_config.md present but project.yaml is missing"
+                .into(),
+            fix_hint: Some(
+                "Run: pageseeds-cli migrate-project-config -p . [--dry-run]".into(),
+            ),
+            auto_fixable: false,
+        });
+    }
+
     // Check for reddit/_reply_guardrails.md
     let guardrails = automation_dir.join("reddit").join("_reply_guardrails.md");
     if !guardrails.exists() {

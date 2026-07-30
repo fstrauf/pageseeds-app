@@ -136,6 +136,8 @@ Buy: https://pageseeds.com"
         "publish-content" => publish_content(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "research-context" => research_context(&db.to_string_lossy(), &project_id),
         "strategy" => strategy_cmd(&require_project_path()),
+        "project-config-status" => project_config_status_cmd(&require_project_path()),
+        "migrate-project-config" => migrate_project_config_cmd(&require_project_path(), &args),
         "research-pull" => research_pull(&db.to_string_lossy(), &project_id, &args),
         "merge-context" => merge_context(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "merge-submit" => merge_submit(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
@@ -745,6 +747,31 @@ fn strategy_cmd(project_path: &str) -> Result<serde_json::Value, String> {
     let strategy =
         pageseeds_core::strategy::load_project_strategy_from_project_path(project_path);
     serde_json::to_value(strategy).map_err(|e| e.to_string())
+}
+
+/// Read-only: project.yaml vs legacy MD readiness as JSON.
+fn project_config_status_cmd(project_path: &str) -> Result<serde_json::Value, String> {
+    let paths = pageseeds_core::engine::project_paths::ProjectPaths::from_path(project_path);
+    let status =
+        pageseeds_core::project_config::project_config_status(paths.automation_dir());
+    serde_json::to_value(status).map_err(|e| e.to_string())
+}
+
+/// Deterministic MD → project.yaml migrator. `--dry-run` plans only; `--force`
+/// backs up then rewrites when YAML already exists.
+fn migrate_project_config_cmd(
+    project_path: &str,
+    args: &[String],
+) -> Result<serde_json::Value, String> {
+    let paths = pageseeds_core::engine::project_paths::ProjectPaths::from_path(project_path);
+    let opts = pageseeds_core::project_config::MigrateOpts {
+        dry_run: has_flag(args, "--dry-run", ""),
+        force: has_flag(args, "--force", ""),
+    };
+    let report =
+        pageseeds_core::project_config::migrate_project_config(paths.automation_dir(), opts)
+            .map_err(|e| e.to_string())?;
+    serde_json::to_value(report).map_err(|e| e.to_string())
 }
 
 /// Path B research pull: session-owned seeds → custom_keyword_research (no nested theme LLM).
@@ -1717,6 +1744,18 @@ const TOOLS: &[ToolHelp] = &[
         name: "strategy",
         purpose: "Read-only: parsed project.md content strategy as JSON",
         example: "strategy -i <id> -p <path>",
+        section: "Path B research",
+    },
+    ToolHelp {
+        name: "project-config-status",
+        purpose: "Read-only: project.yaml vs legacy MD readiness as JSON",
+        example: "project-config-status -p <path>",
+        section: "Path B research",
+    },
+    ToolHelp {
+        name: "migrate-project-config",
+        purpose: "Deterministic MD→project.yaml migrator (no LLM)",
+        example: "migrate-project-config -p <path> [--dry-run] [--force]",
         section: "Path B research",
     },
     ToolHelp {

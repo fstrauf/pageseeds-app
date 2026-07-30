@@ -1,7 +1,8 @@
 //! Typed, versioned on-disk schema for `.github/automation/project.yaml`.
 //!
-//! Foundation only: pure load/save + conversions. No migrator, no CLI, and no
-//! runtime rewiring of strategy / Reddit MD loaders.
+//! Load/save, conversions, and a deterministic MD→YAML migrator
+//! ([`migrate`]). Does not auto-migrate at runtime (#292) and does not rewire
+//! strategy / Reddit MD loaders to YAML-only (#293).
 
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,14 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::reddit::config::MentionStance;
 use crate::strategy::{ProjectStrategy, StrategyCluster};
+
+pub mod migrate;
+
+pub use migrate::{
+    migrate_project_config, project_config_status, LegacySourcesStatus, MigrateAction,
+    MigrateOpts, MigrateReport, MigrateSources, ProjectConfigFieldCounts, ProjectConfigFormat,
+    ProjectConfigStatus,
+};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 

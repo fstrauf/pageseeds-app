@@ -111,43 +111,10 @@ pub(crate) fn extract_seed_subreddits(config: &str) -> Vec<String> {
 }
 
 /// Extract compact search queries from the "## Query Keywords" section of reddit_config.md.
-/// Flexible parsing: accepts "## Query Keywords", "## Keywords", or "## Queries"
+/// Thin shim over [`crate::reddit::config::extract_query_keywords`] so exec
+/// call sites and `reddit_test` keep working without duplication.
 pub(crate) fn extract_query_keywords(config: &str) -> Vec<String> {
-    let mut in_section = false;
-    let mut keywords: Vec<String> = Vec::new();
-    for line in config.lines() {
-        let trimmed = line.trim();
-        // Flexible matching for query keywords section
-        let is_keywords_header = trimmed.starts_with("## Query Keywords")
-            || trimmed.starts_with("## Keywords")
-            || trimmed.starts_with("## Queries");
-        if is_keywords_header {
-            in_section = true;
-            continue;
-        }
-        if in_section {
-            if trimmed.starts_with("##") {
-                break;
-            }
-            if let Some(raw) = trimmed.strip_prefix("- ") {
-                let raw = raw.trim();
-                if raw.starts_with('"') {
-                    if let Some(end) = raw[1..].find('"') {
-                        let kw = raw[1..end + 1].trim().to_string();
-                        if !kw.is_empty() {
-                            keywords.push(kw);
-                        }
-                        continue;
-                    }
-                }
-                let kw = raw.trim_matches('`').trim().to_string();
-                if !kw.is_empty() {
-                    keywords.push(kw);
-                }
-            }
-        }
-    }
-    keywords
+    crate::reddit::config::extract_query_keywords(config)
 }
 
 /// Extract subreddit names from the "## Excluded Subreddits" section of reddit_config.md.
