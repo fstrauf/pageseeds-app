@@ -1,10 +1,13 @@
-//! Tests for `final_selection` — extracted into a sibling file to keep the
-//! implementation under the size threshold, following the
+//! Tests for research final selection / relevance — extracted into a sibling
+//! file to keep the implementation under the size threshold, following the
 //! `engine/exec/keywords/tests.rs` precedent (wired via `mod tests;` in `mod.rs`).
 
 #[cfg(test)]
 mod tests {
     use crate::engine::exec::research::final_selection::*;
+    use crate::engine::exec::research::{
+        apply_off_domain_filter, strategy_context_for_relevance,
+    };
     use crate::models::research::{
         FilterFunnel, KeywordPipelineOutput, ScoredKeyword, SelectedKeyword,
     };
@@ -192,12 +195,14 @@ mod tests {
         assert_eq!(f.intent_dropped, 2); // commercial + navigational
         assert_eq!(f.no_data_or_kd_dropped, 2); // hard kd + no data
         assert_eq!(f.strategy_rejected, 0);
+        assert_eq!(f.relevance_dropped, 0); // filled later in exec path
         assert_eq!(f.final_selected, 1);
         assert_eq!(f.winnability_avoid_dropped, 0); // filled later in exec path
         // Funnel always serializes for operator JSON.
         let v = serde_json::to_value(&output).unwrap();
         assert!(v.get("filter_funnel").is_some());
         assert_eq!(v["filter_funnel"]["pre_filter"], 5);
+        assert_eq!(v["filter_funnel"]["relevance_dropped"], 0);
     }
 
     #[test]
@@ -300,6 +305,35 @@ mod tests {
     }
 
     #[test]
+    fn relevance_dropped_funnel_count_matches_removals() {
+        // Mirrors exec_research_final_selection: after apply_off_domain_filter,
+        // funnel.relevance_dropped is set to the removed count.
+        let pipeline = build_pipeline(vec![
+            kw("what is iv crush", 260, 0.0, "informational"),
+            kw("capital gains tax on sale of property", 5000, 5.0, "informational"),
+            kw("iv crush meaning", 210, 0.0, "informational"),
+        ]);
+        let json = serde_json::to_string(&pipeline).unwrap();
+        let (mut output, _) = select_keywords_deterministic(&json, false, 10, None).unwrap();
+        assert_eq!(output.filter_funnel.relevance_dropped, 0);
+
+        let off_domain: std::collections::HashSet<String> =
+            ["capital gains tax on sale of property".to_string()]
+                .into_iter()
+                .collect();
+        let removed = apply_off_domain_filter(&mut output, &off_domain);
+        output.filter_funnel.relevance_dropped = removed;
+
+        assert_eq!(removed, 1);
+        assert_eq!(output.filter_funnel.relevance_dropped, 1);
+        assert_eq!(selected_count(&output), 2);
+        assert!(output
+            .filter_funnel
+            .summary_line()
+            .contains("relevance_dropped=1"));
+    }
+
+    #[test]
     fn off_domain_filter_empty_set_is_noop() {
         let pipeline = build_pipeline(vec![kw("what is iv crush", 260, 0.0, "informational")]);
         let json = serde_json::to_string(&pipeline).unwrap();
@@ -308,6 +342,65 @@ mod tests {
         let removed = apply_off_domain_filter(&mut output, &std::collections::HashSet::new());
         assert_eq!(removed, 0);
         assert_eq!(output.difficulty.unwrap().results.len(), 1);
+    }
+
+    #[test]
+    fn avoid_only_shortlist_should_fail() {
+        let output = picker_output(vec![
+            selected("avoid a", 9000, 5, Some("avoid"), None),
+            selected("avoid b", 8000, 5, Some("avoid"), None),
+            selected("avoid c", 7000, 5, Some("avoid"), None),
+        ]);
+        assert_eq!(count_non_avoid(&output), 0);
+        assert!(
+            avoid_only_should_fail(&output),
+            "all-Avoid shortlist must fail rather than ship Avoid as target fuel"
+        );
+    }
+
+    #[test]
+    fn residual_avoid_with_one_non_avoid_does_not_fail() {
+        // MIN_NON_AVOID_TO_DROP residual path: 1 non-avoid + avoids still kept;
+        // must not trigger the Avoid-only fail.
+        let mut output = picker_output(vec![
+            selected("target one", 1000, 10, Some("target"), None),
+            selected("avoid keyword", 9000, 5, Some("avoid"), None),
+        ]);
+        sort_by_winnability(&mut output);
+        apply_avoid_policy(&mut output, MIN_NON_AVOID_TO_DROP);
+        assert_eq!(count_non_avoid(&output), 1);
+        assert!(!avoid_only_should_fail(&output));
+        assert_eq!(result_keywords(&output), vec!["target one", "avoid keyword"]);
+    }
+
+    #[test]
+    fn empty_shortlist_is_not_avoid_only_fail() {
+        let output = picker_output(vec![]);
+        assert!(!avoid_only_should_fail(&output));
+    }
+
+    #[test]
+    fn unscored_counts_as_non_avoid_for_fail_gate() {
+        let output = picker_output(vec![
+            selected("unscored", 1000, 10, None, None),
+            selected("avoid head", 9000, 5, Some("avoid"), None),
+        ]);
+        assert_eq!(count_non_avoid(&output), 1);
+        assert!(!avoid_only_should_fail(&output));
+    }
+
+    #[test]
+    fn strategy_context_for_relevance_includes_do_not_expand_and_active() {
+        let strategy = test_strategy();
+        let ctx = strategy_context_for_relevance(&strategy).expect("non-empty strategy");
+        assert!(ctx.contains("do_not_expand phrases:"));
+        assert!(ctx.contains("custom web design"));
+        assert!(ctx.contains("primary keywords:"));
+        assert!(ctx.contains("seo tools"));
+        assert!(ctx.contains("ACTIVE clusters:"));
+        assert!(ctx.contains("SEO Fundamentals"));
+        // Empty strategy omits the section entirely.
+        assert!(strategy_context_for_relevance(&crate::strategy::ProjectStrategy::default()).is_none());
     }
 
     #[test]
@@ -586,6 +679,7 @@ mod tests {
             select_keywords_deterministic(&json, false, 10, Some(&strategy)).unwrap();
         let results = output.difficulty.as_ref().unwrap().results.clone();
         assert_eq!(output.strategy_rejected, 2);
+        assert_eq!(output.filter_funnel.strategy_rejected, 2);
         assert_eq!(output.strategy_rejected_items.len(), 2);
         // Two survivors after hard gate (max 10 so both remain selected).
         assert_eq!(output.strategy_kept, 2);

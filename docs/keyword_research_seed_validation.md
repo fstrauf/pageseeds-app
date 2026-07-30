@@ -79,10 +79,25 @@ considered and rejected: it cannot tell "ao3" (off-domain) from "61-day"
 (on-domain new term), and it would kill legitimate semantic expansions
 ("iv crush" → "implied volatility calculator").
 
-`research_final_selection` therefore: selects top 15 deterministically, runs
-one batched LLM relevance check (`prompts/candidate_relevance.md`,
-`CandidateRelevanceOutput`, non-fatal on failure), drops flagged candidates,
-trims to 10, then enriches winnability.
+`research_final_selection` therefore:
+
+1. Selects top 15 deterministically (strategy hard gate + volume/KD rank).
+2. Runs one batched LLM relevance check (`prompts/candidate_relevance.md`,
+   `CandidateRelevanceOutput`) that is **vertical-drift-aware**: industry /
+   product-vertical / intent drift is flagged even when seed vocabulary
+   overlaps (e.g. property CGT or dictionary idioms from an options-tax seed).
+   Product-adjacent strategy terms the brief/themes support are kept.
+   Strategy context (`do_not_expand`, primary / ACTIVE clusters) is injected
+   into the user prompt when present.
+3. Records removals on `filter_funnel.relevance_dropped`.
+4. Enriches winnability, sorts, applies avoid policy.
+5. **Fails empty** when the remaining shortlist is Avoid-only (no non-Avoid /
+   unscored candidates) instead of presenting Avoid rows as target fuel.
+6. Trims to 10.
+
+Relevance LLM outage remains **non-fatal** (deterministic shortlist stands;
+`relevance_dropped=0`). Fail-closed whole research on relevance down is a
+non-goal.
 
 ## Verification
 

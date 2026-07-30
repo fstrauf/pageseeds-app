@@ -7,6 +7,8 @@ use crate::strategy::{
     apply_strategy_filter, load_project_strategy_from_project_path, ProjectStrategy,
 };
 
+use super::filter_off_domain_candidates;
+
 /// Output format matching what the frontend KeywordPicker expects.
 ///
 /// The frontend expects either:
@@ -126,6 +128,7 @@ pub fn select_keywords_deterministic(
         no_data_or_kd_dropped,
         intent_dropped,
         strategy_rejected,
+        relevance_dropped: 0,
         winnability_avoid_dropped: 0,
         final_selected: 0,
     };
@@ -503,11 +506,12 @@ pub fn exec_research_final_selection(
             let strategy_rejected_items = output.strategy_rejected_items.clone();
             let strategy_kept = output.strategy_kept;
             // Agentic relevance check: DataForSEO expansion can return
-            // same-vocabulary but off-domain candidates (e.g. "assignment risk
-            // ao3" from an options-trading seed). Cannot be deterministic:
-            // telling "ao3" (off-domain) apart from "61-day" (on-domain new
-            // term) requires domain judgment. Non-fatal — on failure the
-            // deterministic shortlist stands and the human reviewer decides.
+            // same-vocabulary but off-domain / vertical-drift candidates
+            // (e.g. property CGT from an options-tax seed). Cannot be
+            // deterministic: telling "ao3" (off-domain) apart from "61-day"
+            // (on-domain new term) requires domain judgment. Non-fatal — on
+            // failure the deterministic shortlist stands and the human
+            // reviewer decides.
             let themes: Vec<String> = serde_json::from_str::<KeywordPipelineOutput>(pipeline_json)
                 .map(|p| p.themes)
                 .unwrap_or_default();
@@ -516,7 +520,9 @@ pub fn exec_research_final_selection(
                 &themes,
                 project_path,
                 agent_provider,
+                &strategy,
             );
+            output.filter_funnel.relevance_dropped = removed;
 
             // Enrich the overshoot with winnability scores (AIO risk,
             // competitor authority) BEFORE trimming, so an `Avoid` verdict can
@@ -532,6 +538,25 @@ pub fn exec_research_final_selection(
             // remain (badged, at the bottom) only as last resort.
             sort_by_winnability(&mut output);
             let avoid_dropped = apply_avoid_policy(&mut output, MIN_NON_AVOID_TO_DROP);
+
+            // Origin D: when the entire remaining pool is Avoid, do not ship
+            // 10 Avoid rows as "selected" target fuel. Residual avoids stay
+            // only when at least one non-avoid (or unscored) candidate exists
+            // (MIN_NON_AVOID_TO_DROP path unchanged).
+            if avoid_only_should_fail(&output) {
+                output.filter_funnel.winnability_avoid_dropped = avoid_dropped;
+                output.filter_funnel.final_selected = 0;
+                return StepResult::fail(format!(
+                    "No selectable non-Avoid candidates after winnability \
+                     scoring ({} candidate(s) remaining, all Avoid). \
+                     Try different seed keywords or broaden the territory \
+                     so the shortlist is not pure AIO/authority-dominated \
+                     heads. ({})",
+                    selected_count(&output),
+                    output.filter_funnel.summary_line()
+                ));
+            }
+
             trim_to_final(&mut output, FINAL_RESULTS);
             let final_count = selected_count(&output);
             output.filtered_out = output.total_candidates.saturating_sub(final_count);
@@ -610,22 +635,10 @@ fn is_avoid_bucket(winnability: Option<&str>) -> bool {
     matches!(winnability, Some("avoid"))
 }
 
-/// Hard-drop AIO `avoid` rows when enough non-avoid candidates exist.
-///
-/// Soft demote via `sort_by_winnability` + `trim_to_final` only pushes avoids
-/// below the cut line when non-avoids already fill the top N. When the
-/// overshoot is mostly avoid (common for AIO-blocked head terms), product-
-/// adjacent long-tails still lose slots after trim. This policy:
-/// - Counts candidates with `winnability != Some("avoid")` across the active
-///   output shape (missing/unknown = non-avoid).
-/// - If non-avoid count ≥ `min_non_avoid`, removes every avoid row from both
-///   `landing_page_candidates` and `difficulty.results`.
-/// - Else keeps residual avoids (already sorted last) as last resort.
-///
-/// Call after `sort_by_winnability` and before `trim_to_final`.
-/// Returns the number of hard-dropped avoid rows (0 when policy does not fire).
-pub(crate) fn apply_avoid_policy(output: &mut KeywordPickerOutput, min_non_avoid: usize) -> usize {
-    let non_avoid = if !output.landing_page_candidates.is_empty() {
+/// Count candidates whose winnability is not explicitly `avoid`.
+/// Missing / unknown buckets count as non-avoid (target-equivalent).
+pub(crate) fn count_non_avoid(output: &KeywordPickerOutput) -> usize {
+    if !output.landing_page_candidates.is_empty() {
         output
             .landing_page_candidates
             .iter()
@@ -642,7 +655,32 @@ pub(crate) fn apply_avoid_policy(output: &mut KeywordPickerOutput, min_non_avoid
                     .count()
             })
             .unwrap_or(0)
-    };
+    }
+}
+
+/// True when the shortlist is non-empty and every remaining candidate is
+/// explicitly Avoid — used to fail the step instead of shipping Avoid fuel.
+pub(crate) fn avoid_only_should_fail(output: &KeywordPickerOutput) -> bool {
+    let total = selected_count(output);
+    total > 0 && count_non_avoid(output) == 0
+}
+
+/// Hard-drop AIO `avoid` rows when enough non-avoid candidates exist.
+///
+/// Soft demote via `sort_by_winnability` + `trim_to_final` only pushes avoids
+/// below the cut line when non-avoids already fill the top N. When the
+/// overshoot is mostly avoid (common for AIO-blocked head terms), product-
+/// adjacent long-tails still lose slots after trim. This policy:
+/// - Counts candidates with `winnability != Some("avoid")` across the active
+///   output shape (missing/unknown = non-avoid).
+/// - If non-avoid count ≥ `min_non_avoid`, removes every avoid row from both
+///   `landing_page_candidates` and `difficulty.results`.
+/// - Else keeps residual avoids (already sorted last) as last resort.
+///
+/// Call after `sort_by_winnability` and before `trim_to_final`.
+/// Returns the number of hard-dropped avoid rows (0 when policy does not fire).
+pub(crate) fn apply_avoid_policy(output: &mut KeywordPickerOutput, min_non_avoid: usize) -> usize {
+    let non_avoid = count_non_avoid(output);
 
     if non_avoid < min_non_avoid {
         return 0;
@@ -723,118 +761,6 @@ pub(crate) fn sort_by_winnability(output: &mut KeywordPickerOutput) {
 /// Commercial value of a landing candidate after selection (volume × CPC).
 fn lp_commercial_value(c: &LandingPageCandidate) -> f64 {
     c.estimated_volume as f64 * c.cpc.unwrap_or(0.0)
-}
-
-/// Apply an off-domain list to the shortlist (case-insensitive, trimmed).
-/// Pure — unit-tested without an LLM. Returns the number removed.
-pub(crate) fn apply_off_domain_filter(
-    output: &mut KeywordPickerOutput,
-    off_domain: &std::collections::HashSet<String>,
-) -> usize {
-    if off_domain.is_empty() {
-        return 0;
-    }
-    let before = selected_count(output);
-    output
-        .landing_page_candidates
-        .retain(|c| !off_domain.contains(&c.keyword.trim().to_lowercase()));
-    if let Some(d) = &mut output.difficulty {
-        d.results
-            .retain(|k| !off_domain.contains(&k.keyword.trim().to_lowercase()));
-    }
-    before - selected_count(output)
-}
-
-/// One batched LLM call flagging off-domain candidates in the shortlist.
-/// Non-fatal: returns 0 (keeps everything) when the check is unavailable.
-fn filter_off_domain_candidates(
-    output: &mut KeywordPickerOutput,
-    themes: &[String],
-    project_path: &str,
-    agent_provider: &str,
-) -> usize {
-    let keywords: Vec<String> = if !output.landing_page_candidates.is_empty() {
-        output
-            .landing_page_candidates
-            .iter()
-            .map(|c| c.keyword.clone())
-            .collect()
-    } else {
-        output
-            .difficulty
-            .as_ref()
-            .map(|d| d.results.iter().map(|k| k.keyword.clone()).collect())
-            .unwrap_or_default()
-    };
-    if keywords.is_empty() {
-        return 0;
-    }
-
-    let brief = std::fs::read_to_string(
-        crate::engine::project_paths::ProjectPaths::from_path(project_path)
-            .automation_dir
-            .join("project.md"),
-    )
-    .unwrap_or_else(|_| "(no brief found)".to_string());
-    const MAX_BRIEF_LEN: usize = 8_000;
-    let brief_trimmed = if brief.len() > MAX_BRIEF_LEN {
-        format!("{}… [truncated]", &brief[..MAX_BRIEF_LEN])
-    } else {
-        brief
-    };
-
-    let system = include_str!("../../../prompts/candidate_relevance.md");
-    let user = format!(
-        "## Project Context\n\n{}\n\n## Research Themes\n\n{}\n\n## Candidate Keywords\n\n{}",
-        brief_trimmed,
-        themes.join(", "),
-        keywords.join("\n")
-    );
-    let prompt = format!("{}\n\n---\n\n{}", system, user);
-
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(r) => r,
-        Err(e) => {
-            log::warn!("[relevance_check] Failed to create runtime: {}", e);
-            return 0;
-        }
-    };
-
-    let result = rt.block_on(async {
-        crate::rig::extraction::extract_structured::<
-            crate::models::research::CandidateRelevanceOutput,
-        >(agent_provider, &prompt, Some(system), Some("direct"), None)
-        .await
-    });
-
-    match result {
-        Ok(check) => {
-            let off_domain: std::collections::HashSet<String> = check
-                .off_domain_keywords
-                .iter()
-                .map(|k| k.trim().to_lowercase())
-                .filter(|k| !k.is_empty())
-                .collect();
-            let removed = apply_off_domain_filter(output, &off_domain);
-            if removed > 0 {
-                log::info!(
-                    "[relevance_check] removed {} off-domain candidates: {:?}",
-                    removed,
-                    off_domain
-                );
-            } else {
-                log::info!("[relevance_check] all {} candidates on-domain", keywords.len());
-            }
-            removed
-        }
-        Err(e) => {
-            log::warn!(
-                "[relevance_check] extraction failed ({}); keeping deterministic shortlist",
-                e
-            );
-            0
-        }
-    }
 }
 
 /// Enrich shortlisted keywords with winnability scores using SERP feature data.

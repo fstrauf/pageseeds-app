@@ -119,6 +119,9 @@ pub struct FilterFunnel {
     pub intent_dropped: usize,
     /// Hard-dropped by project.md strategy (`do_not_expand` / LEGACY).
     pub strategy_rejected: usize,
+    /// Dropped by agentic off-domain / vertical-drift relevance check (#277).
+    #[serde(default)]
+    pub relevance_dropped: usize,
     /// Hard-dropped by winnability `avoid` policy.
     pub winnability_avoid_dropped: usize,
     /// Final shortlist size after selection / avoid / trim.
@@ -131,12 +134,13 @@ impl FilterFunnel {
         format!(
             "filter_funnel: volume_dropped={}, volume_unknown_kept={}, \
              no_data_or_kd_dropped={}, intent_dropped={}, strategy_rejected={}, \
-             winnability_avoid_dropped={}, final_selected={}",
+             relevance_dropped={}, winnability_avoid_dropped={}, final_selected={}",
             self.volume_dropped,
             self.volume_unknown_kept,
             self.no_data_or_kd_dropped,
             self.intent_dropped,
             self.strategy_rejected,
+            self.relevance_dropped,
             self.winnability_avoid_dropped,
             self.final_selected
         )

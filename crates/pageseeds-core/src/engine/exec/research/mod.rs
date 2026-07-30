@@ -10,10 +10,14 @@
 /// eliminating the need for a separate normalizer step.
 mod final_selection;
 mod prompts;
+mod relevance;
 mod tests;
 
 pub(crate) use final_selection::*;
 pub(crate) use prompts::*;
+pub(crate) use relevance::{
+    apply_off_domain_filter, filter_off_domain_candidates, strategy_context_for_relevance,
+};
 
 use crate::engine::project_paths::ProjectPaths;
 use crate::engine::workflows::{StepResult, WorkflowStep};
