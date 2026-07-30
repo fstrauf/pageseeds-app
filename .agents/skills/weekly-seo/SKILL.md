@@ -119,7 +119,7 @@ Breaking these fails the run.
 | 8 | **File writes:** (a) `weekly_seo_{YYYYMMDD_HHMMSS}.md` under automation; (b) **narrow** updates to `seo_program.yaml` only — queue item `status` / `target_slug` / short `notes` when you ship or claim work. **Do not** rewrite goal, metrics, mode mix, or invent Primary keywords mid-weekly (that is `/seo-program-review`). |
 | 9 | **Missing integrations:** GSC/Clarity/Reddit fail → degrade and say so; never fake data. |
 | 10 | **PostHog desk is default:** after GSC shortlist, run the light PostHog desk via MCP. **Only** source for project id: `project.yaml` → `posthog_project_id`. Assume MCP exists. If MCP missing, auth fails, or `posthog_project_id` absent → **WARN** in report + final message, continue on GSC only — no name/host guessing, no skill-side map, never invent engagement numbers. |
-| 11 | **Program mode:** When `seo_program.yaml` exists, lock **Mode** from `current_mode` (unless user forces another mode) and prefer draining matching queues over pure desk noise. Missing file → desk-default + note gap. |
+| 11 | **Program mode:** When `seo_program.yaml` exists, lock **Mode** from `current_mode` (unless user forces another mode) and prefer draining open program queues (primary / harvest / tools / **prune**) over pure desk noise. Missing file → desk-default + note gap. **Never execute noindex** from `prune_queue` — surface under Needs your decision only. |
 | 12 | **Run spacing (Phase 0):** If the newest **mode-executing** `weekly_seo_*.md` for this project is **&lt; 5 days** old (timestamp from filename `weekly_seo_YYYYMMDD_HHMMSS.md` — same parse as weekly-seo-status; do **not** re-stat mtime), a **mode-executing** weekly run **MUST STOP** before any desk/mode work. Breaking this fails the run. **Measure-only** exemption and explicit **override** only — see [Phase 0 — spacing gate](#a-phase-0--spacing-gate). |
 
 ### May-create via `create-task`
@@ -298,17 +298,18 @@ under soft path A.
 | `ctr_outcome_review` as weekly action backlog (#152) | Cancel / ignore; call `ctr-outcomes` for CTR closed-loop |
 | Video clips as weekly spine / may-create / multi-clip batch (#222) | Elective via `/video-clip` only — see [Optional post-publish video](#optional-post-publish-video-elective) |
 | Territory / top-shortlist-by-impressions as default **new-article** seeds when Primary or ACTIVE exist (#275) | Research week: `research-pull -K` from `content_strategy` Primary + ACTIVE first; shortlist/desk only if strategy empty or Primary/ACTIVE exhausted |
+| Agent-executed noindex / bulk deindex from `prune_queue` (#306) | Surface noindex rows under **Needs your decision** / manual checklist only; never CLI-noindex mid-run |
 
 ## Soft guidance (default path)
 
 ```text
-Phase 0 spacing gate → load seo_program.yaml (mode + queues)
+Phase 0 spacing gate → load seo_program.yaml (mode + queues incl. optional prune)
   → due content_outcome_review (≤1–2; non-compliant only if due≥1 and zero executed; rest deferred under cap; “none due” if filter empty)
   → refresh ground truth (if stale) → site-overview
   → articles / article / gsc-queries
   → optional striking-distance filter (when pos 7–13 inventory looks high-ROI)
   → PostHog desk (default — project.yaml posthog_project_id → switch-project; WARN if missing)
-  → plan within Mode → ≤5 actions → update queue statuses (incl. measuring→done) → report
+  → plan within Mode (+ optional prune drain side-pass) → ≤5 actions → update queue statuses (incl. measuring→done) → report
 ```
 
 Reorder/deepen when a clear anomaly appears (including optional
@@ -330,7 +331,7 @@ them. It sequences **mode + queues** so weekly runs do not freestyle every time.
 
 1. Read `seo_program.yaml` if present (`schema_version`, `goal`, `current_mode`,
    `mode_mix_this_month`, `primary_backlog`, `harvest_queue`, `tools_queue`,
-   `product_paths`, `metrics`, `last_reviewed_at`).
+   `prune_queue`, `product_paths`, `metrics`, `last_reviewed_at`).
 2. **Lock Mode** for this run:
 
 | `current_mode` | Report label | Prefer |
@@ -353,6 +354,8 @@ them. It sequences **mode + queues** so weekly runs do not freestyle every time.
    full program board mid-weekly.
 6. **Stale review:** if `last_reviewed_at` older than `review_cadence_days`
    (default 30), one line under Recommended: run `/seo-program-review`.
+7. **Prune side-pass:** if `prune_queue` has open rows, plan drain within
+   budgets (any mode) — see [Prune queue drain](#prune-queue-drain).
 
 #### Mode vs desk (priority)
 
@@ -360,7 +363,24 @@ them. It sequences **mode + queues** so weekly runs do not freestyle every time.
 2. Desk anomalies that are clearly higher ROI **and** still on-strategy
    (not LEGACY / do_not_expand expansion).  
 3. Never expand beginner/tax LEGACY to “fill” a quiet attract week — prefer
-   harvest/tools or skip with honesty.
+   harvest/tools or skip with honesty.  
+4. Optional **prune drain** (any mode) when open `prune_queue` rows exist —
+   high-ROI cleanup, not a free-for-all (typically ≤1–2 merge_into per week).
+
+#### Prune queue drain
+
+When `prune_queue` has open rows (any mode, as a side-pass within ≤5 creates /
+≤15 exec budgets):
+
+| action | Weekly behavior |
+|--------|-----------------|
+| `merge_into:<keeper-slug>` | Claim row `in_progress`; Path B: `merge-context` with keep=keeper + redirect=slug (via `-K`/`-R` or task ids) → write merged MDX → `merge-submit` (pass `-y` only after human OK when `requires_human_confirm`). Successful submit already schedules `content_outcome_review`. Update row → `measuring` or `done` per existing narrow YAML rules. |
+| `noindex` | **Never** execute. List under report **Needs your decision** with slug + evidence + confirm flag. Operator does noindex outside this skill. May mark `dropped` only if human says drop; do not flip to `done` without human confirmation that they noindexed. |
+
+- **Cap:** typically ≤1–2 prune merges per week if higher-mode work also runs;
+  prune is high-ROI cleanup not a free-for-all.
+- **Hard ban:** never agent-execute noindex / bulk deindex from this queue.
+- Schema: [docs/SEO_PROGRAM.md](../../../docs/SEO_PROGRAM.md) § `prune_queue`.
 
 #### End of run — narrow YAML updates only
 
@@ -1029,7 +1049,8 @@ operator runbook: `.agents/skills/video-clip/SKILL.md`.
 
 ## Program
 - Goal (one line from seo_program.yaml) or “no program file”
-- Queues touched: primary/harvest/tools rows claimed or status-updated
+- Queues touched: primary/harvest/tools/prune rows claimed or status-updated
+- Prune: merge_into drained (n) / noindex surfaced for decision (n)
 - last_reviewed_at / stale review warning if any
 
 ## Exploration path
@@ -1064,6 +1085,8 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 
 ## Needs your decision
 | Task | What's pending | Command to resolve |
+- Include open prune `noindex` rows (slug + evidence + `confirm: required`) —
+  operator-manual only; never agent-executed.
 
 ## Queued, not yet run
 …
@@ -1202,8 +1225,11 @@ guidance if agents thrash — not hard rails first.
 
 **SEO program ops:** `seo_program.yaml` is the multi-week mode/queue SOT
 (schema [docs/SEO_PROGRAM.md](../../../docs/SEO_PROGRAM.md)). Weekly locks
-`current_mode` and drains queues; `/seo-program-review` rewrites the board
-monthly. Theme gates stay in `project.yaml` — do not re-encode Primary in prose.
+`current_mode` and drains queues (primary / harvest / tools / optional
+**prune**); `/seo-program-review` rewrites the board monthly (incl. Prune
+scan). Theme gates stay in `project.yaml` — do not re-encode Primary in prose.
+Prune `merge_into` uses existing Path B merge; prune `noindex` is
+operator-manual only (`confirm: required`, never agent-executed).
 
 **Run spacing (#303):** Phase 0 hard-refuses mode execution when the newest
 mode-executing `weekly_seo_*.md` filename is &lt; 5 days old. Measure-only
