@@ -21,6 +21,7 @@ use crate::engine::task_store;
 use crate::error::{Error, Result};
 use crate::models::article::Article;
 
+use super::outcomes_inventory::build_outcomes_inventory;
 use super::residual_inventory::{build_non_catalog_gsc_inventory, build_redirect_equity_inventory};
 use super::types::*;
 
@@ -284,48 +285,6 @@ pub fn build_site_overview(
         outcomes,
         hints,
     })
-}
-
-/// Aggregate content_outcome_results + ctr_outcomes for the desk (#302).
-fn build_outcomes_inventory(conn: &Connection, project_id: &str) -> OutcomesInventory {
-    let mut inv = OutcomesInventory::default();
-
-    if let Ok(content_rows) = db::list_content_outcome_results(conn, project_id) {
-        inv.content_total = content_rows.len();
-        for row in &content_rows {
-            match row.classification.as_str() {
-                "improved" => inv.content_improved += 1,
-                "regressed" => inv.content_regressed += 1,
-                "neutral" => inv.content_neutral += 1,
-                "insufficient_data" => inv.content_insufficient_data += 1,
-                _ => {}
-            }
-        }
-    }
-
-    if let Ok(ctr_rows) = db::list_ctr_outcomes(conn, project_id) {
-        inv.ctr_total = ctr_rows.len();
-        for row in &ctr_rows {
-            match row.outcome_status.as_str() {
-                "improved" => inv.ctr_improved += 1,
-                "regressed" => inv.ctr_regressed += 1,
-                "neutral" => inv.ctr_neutral += 1,
-                "insufficient_data" => inv.ctr_insufficient_data += 1,
-                "deployment_unverified" => {
-                    inv.ctr_deployment_unverified += 1;
-                    inv.ctr_stuck_pending += 1;
-                }
-                "pending" => {
-                    inv.ctr_pending += 1;
-                    inv.ctr_stuck_pending += 1;
-                }
-                "deployed" => inv.ctr_pending += 1,
-                _ => {}
-            }
-        }
-    }
-
-    inv
 }
 
 /// Article catalog with GSC rollup; redirected excluded by default.
