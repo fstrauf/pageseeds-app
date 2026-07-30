@@ -89,8 +89,9 @@ notes: optional freeform (short)
 
 **Every week** still runs measure as a **mandatory side-pass when due** (≤1–2
 due outcome reviews, post-`not_before` filter) even when `current_mode` is
-attract/harvest/tools. Skipping due rows is non-compliant; “none due” after
-filter is fine.
+attract/harvest/tools. **Non-compliant only if** ≥1 due and zero executed;
+when due >2, remainder is **deferred under cap** (still compliant). “None due”
+after filter is fine.
 
 ### Queue statuses
 
