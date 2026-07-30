@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::models::ctr::CtrOutcome;
 use crate::models::task::Task;
 
-// ─── CTR change events (issue #152) ──────────────────────────────────────────
+// ─── CTR change events (issue #152 / #302) ───────────────────────────────────
 //
 // BUSINESS RULE: dual-layer measurement model
 // - Tape: append-only `gsc_page_daily` (per-page daily GSC snapshots)
@@ -11,6 +11,8 @@ use crate::models::task::Task;
 // No per-fix `ctr_outcome_review` tasks. Classification prefers 28-day
 // windows from the daily tape; live_site_pages / article_metadata are fallbacks.
 // `deployed_at` stays null until live title verification (see ctr_audit::outcome).
+// Verification/classification runs via the free `ctr-outcomes` CLI path (weekly
+// skill measurement pass) — not a task fan-out.
 
 /// Open / in-flight statuses that a re-ship for the same article supersedes.
 const SUPERSEDEABLE_STATUSES: &[&str] = &[

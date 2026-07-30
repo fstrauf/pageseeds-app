@@ -54,8 +54,32 @@ pub struct SiteOverview {
     pub redirect_equity: RedirectEquityInventory,
     /// High-impression GSC pages outside live catalog and redirect map (#261).
     pub non_catalog_gsc: NonCatalogGscInventory,
+    /// Closed-loop outcome aggregates from content + CTR tables (#302).
+    pub outcomes: OutcomesInventory,
     /// Deterministic flag strings only (no soft-cluster prose).
     pub hints: Vec<String>,
+}
+
+/// Desk rollup of measured content/CTR outcomes (issue #302).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OutcomesInventory {
+    /// Rows in `content_outcome_results` for this project.
+    pub content_total: usize,
+    pub content_improved: usize,
+    pub content_regressed: usize,
+    pub content_neutral: usize,
+    pub content_insufficient_data: usize,
+    /// Rows in `ctr_outcomes` for this project.
+    pub ctr_total: usize,
+    pub ctr_improved: usize,
+    pub ctr_regressed: usize,
+    pub ctr_neutral: usize,
+    pub ctr_insufficient_data: usize,
+    pub ctr_deployment_unverified: usize,
+    /// `pending` or `deployed` (clock not yet classified).
+    pub ctr_pending: usize,
+    /// Stuck: `pending` or `deployment_unverified` (need deploy verify / re-check).
+    pub ctr_stuck_pending: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

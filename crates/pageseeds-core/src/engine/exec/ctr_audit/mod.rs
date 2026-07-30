@@ -30,3 +30,6 @@ pub(crate) use rendered::*;
 pub(crate) use standalone_context::*;
 pub(crate) use task_spawner::*;
 pub(crate) use template::*;
+
+// Conn-level entry points for CLI / desk (issue #302).
+pub use outcome::{run_ctr_outcome_compare, run_ctr_outcome_report};
