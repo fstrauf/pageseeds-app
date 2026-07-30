@@ -120,6 +120,7 @@ Breaking these fails the run.
 | 9 | **Missing integrations:** GSC/Clarity/Reddit fail → degrade and say so; never fake data. |
 | 10 | **PostHog desk is default:** after GSC shortlist, run the light PostHog desk via MCP. **Only** source for project id: `project.yaml` → `posthog_project_id`. Assume MCP exists. If MCP missing, auth fails, or `posthog_project_id` absent → **WARN** in report + final message, continue on GSC only — no name/host guessing, no skill-side map, never invent engagement numbers. |
 | 11 | **Program mode:** When `seo_program.yaml` exists, lock **Mode** from `current_mode` (unless user forces another mode) and prefer draining matching queues over pure desk noise. Missing file → desk-default + note gap. |
+| 12 | **Run spacing (Phase 0):** If the newest **mode-executing** `weekly_seo_*.md` for this project is **&lt; 5 days** old (timestamp from filename `weekly_seo_YYYYMMDD_HHMMSS.md` — same parse as weekly-seo-status; do **not** re-stat mtime), a **mode-executing** weekly run **MUST STOP** before any desk/mode work. Breaking this fails the run. **Measure-only** exemption and explicit **override** only — see [Phase 0 — spacing gate](#a-phase-0--spacing-gate). |
 
 ### May-create via `create-task`
 
@@ -301,7 +302,7 @@ under soft path A.
 ## Soft guidance (default path)
 
 ```text
-recency → load seo_program.yaml (mode + queues)
+Phase 0 spacing gate → load seo_program.yaml (mode + queues)
   → due content_outcome_review (≤1–2; non-compliant only if due≥1 and zero executed; rest deferred under cap; “none due” if filter empty)
   → refresh ground truth (if stale) → site-overview
   → articles / article / gsc-queries
@@ -325,7 +326,7 @@ Theme gates (Primary, ACTIVE/MAINTAIN/LEGACY, `do_not_expand`) remain in
 `project.yaml` / `pageseeds-cli strategy` — the program file does **not** replace
 them. It sequences **mode + queues** so weekly runs do not freestyle every time.
 
-#### Load (after recency, before desk deep-dive)
+#### Load (after Phase 0 spacing gate, before desk deep-dive)
 
 1. Read `seo_program.yaml` if present (`schema_version`, `goal`, `current_mode`,
    `mode_mix_this_month`, `primary_backlog`, `harvest_queue`, `tools_queue`,
@@ -378,16 +379,86 @@ When you ship or claim work, update the matching queue row:
 cluster policy mid-weekly unless the user explicitly asks to advance mode
 (e.g. “set mode to harvest”). Full rebalance = `/seo-program-review`.
 
-### A. Recency / load
+### A. Phase 0 — spacing gate
+
+**Mandatory first steps** before desk, mode work, or growth creates. Hard rail #12.
+
+#### Step 1 — newest report age (filename timestamp)
+
+```bash
+ls -1t <project-path>/.github/automation/weekly_seo_*.md 2>/dev/null | head -1
+```
+
+Parse wall-clock run time from the filename only:
+`weekly_seo_YYYYMMDD_HHMMSS.md` (e.g. `weekly_seo_20260723_183104.md` →
+`2026-07-23 18:31`). Do **not** re-stat mtime for “run time” (same rule as
+weekly-seo-status).
+
+- **Age** = calendar days from that date to today (same day = `0`).
+- No report file → age is infinite (gate does **not** fire).
+
+**Which report drives the spacing clock:** prefer the newest report that was
+**mode-executing**. If a report header/Summary marks **measure-only**, it does
+**not** reset the 5-day clock — look past it to the newest mode-executing
+report (or treat as no mode-executing report if none exist). Unlabeled reports
+count as mode-executing (fail closed for spacing).
+
+#### Step 2 — refuse mode execution when age &lt; 5 days
+
+| Intent this invocation | Gate |
+|------------------------|------|
+| **Mode-executing** (desk/mode work, growth creates, queue drain, Path B write/fix/merge, research selects that create work) | If newest **mode-executing** report age **&lt; 5 days** **and** no override → **STOP** before any desk/mode work |
+| **Measure-only** (outcome reviews / measurement / report only; **zero** growth creates; **no** mode queue work) | **Exempt** — may proceed without override; does **not** require override |
+| Explicit **override** in this invocation | Proceed with mode work; **must** log under **Decisions made for you** |
+
+**Standard refusal message** (mode-executing blocked; copy shape exactly):
+
+```text
+Weekly SEO for `<id>` ran `<date>` (<5d ago). Refusing mode execution. Run a measure-only pass, wait until `<date+5d>`, or say 'run anyway' to override.
+```
+
+Breaking the gate (continuing mode work without override when age &lt; 5d)
+**fails the run**.
+
+#### Measure-only (definition + clock)
+
+A pass is **measure-only** when it creates/executes **no growth actions**: no
+mode queue drain, no Path B write/fix/merge for growth, no research selection
+creates, no may-create growth tasks — only measurement (e.g. due
+`content_outcome_review`, `ctr-outcomes`, light desk reads) and optional
+report. Measure-only:
+
+- Needs **no** override when the spacing gate would otherwise fire.
+- **Does not reset** the spacing clock. If you write a report, mark it
+  **measure-only** in the header/Summary so the next Phase 0 can ignore it for
+  the 5d clock.
+- Mode-executing end reports **do** reset the clock (newest mode-executing
+  filename becomes the gate baseline).
+
+#### Override
+
+Only an **explicit** user phrase in the **current** invocation counts:
+`"run anyway"` / `"force weekly"` (or clear equivalent). Do **not** infer
+override from silence or from a prior session. When used:
+
+1. Continue with full mode path.
+2. Log one line under **Decisions made for you** (e.g. “Spacing override: user
+   said run anyway; last mode-executing report was {date} ({n}d ago).”).
+
+#### Step 3 — open-task load check (unchanged; separate signal)
 
 ```bash
 pageseeds-cli list-tasks -i <id> -p <path>
 ```
 
-- Latest `weekly_seo_*.md` under automation.
-- **Skip run** only if last weekly **&lt; 5 days** *or* **≥ 5** fix-like tasks
-  open (`todo`/`queued`/`in_progress`) **and** user did not force. State why.
-- Override: “run anyway” → continue.
+- **≥ 5** open fix-like tasks (`todo` / `queued` / `in_progress` for types such
+  as `fix_content_article`, `fix_ctr_article`, `content_review`, indexing
+  fixes) **and** user did not force → may **skip** mode work (load signal;
+  advisory/skip as before). State why.
+- Independent of the hard 5d spacing gate: load can skip even when spacing is
+  clear; spacing can refuse even when open-task count is low.
+- Override for load: same “run anyway” / “force weekly” family; log under
+  Decisions.
 
 #### Due `content_outcome_review`
 
@@ -988,6 +1059,7 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 
 ## Decisions made for you
 …
+(Spacing overrides — “run anyway” / “force weekly” — must appear here as one line.)
 
 ## Needs your decision
 | Task | What's pending | Command to resolve |
@@ -1067,7 +1139,7 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 - Soft clusters **not** ground truth / merge authority.  
 - Mechanical reviews only; file writes = weekly report + narrow `seo_program.yaml` status updates.  
 - **Program mode** from `seo_program.yaml` when present; missing → desk-default + note; monthly rebalance = `/seo-program-review`.  
-- Idempotent re-runs: recency + spawner keys.  
+- Idempotent re-runs: **hard Phase 0 spacing gate** (5d on mode-executing reports; measure-only exempt; explicit override logged) + open-task load check + spawner keys.  
 - **Video clips are elective via `/video-clip`**; not weekly spine / not may-create.
 
 ---
@@ -1131,3 +1203,9 @@ guidance if agents thrash — not hard rails first.
 (schema [docs/SEO_PROGRAM.md](../../../docs/SEO_PROGRAM.md)). Weekly locks
 `current_mode` and drains queues; `/seo-program-review` rewrites the board
 monthly. Theme gates stay in `project.yaml` — do not re-encode Primary in prose.
+
+**Run spacing (#303):** Phase 0 hard-refuses mode execution when the newest
+mode-executing `weekly_seo_*.md` filename is &lt; 5 days old. Measure-only
+passes are exempt and do not reset the clock; override requires an explicit
+user phrase logged under Decisions. weekly-seo-status surfaces **Runs (7d)** /
+cadence collapse retrospectively.

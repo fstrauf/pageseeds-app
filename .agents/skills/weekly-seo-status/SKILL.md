@@ -145,18 +145,25 @@ Abort clearly if neither works / DB missing / zero projects.
 
 For each registry row (`id`, `name`, `path`):
 
-1. If `path` does not exist → status **`path missing`**, report **—**.
-2. Else newest report:
+1. If `path` does not exist → status **`path missing`**, report **—**, **Runs (7d)** = **—**.
+2. Else list all reports (newest first):
 
 ```bash
-ls -1t "$path/.github/automation"/weekly_seo_*.md 2>/dev/null | head -1
+ls -1t "$path/.github/automation"/weekly_seo_*.md 2>/dev/null
 ```
 
-3. Parse timestamp from filename: `weekly_seo_YYYYMMDD_HHMMSS.md`  
+3. **Newest report** = first line of that list (or none).
+4. Parse timestamp from filename: `weekly_seo_YYYYMMDD_HHMMSS.md`  
    - Example: `weekly_seo_20260723_183104.md` → `2026-07-23 18:31`  
    - Use wall clock from the **filename** (do not re-stat for “run time”).
-4. **Days ago** = calendar days from today to that date (same day = `0`).
-5. Classify **status** (report only):
+5. **Days ago** = calendar days from today to that date (same day = `0`).
+6. **Runs (7d):** count every `weekly_seo_*.md` whose filename timestamp falls
+   in the trailing **7 calendar days** (today inclusive; age 0–6 days, or
+   equivalently timestamp ≥ today−6d start-of-day). Path missing / no reports
+   → **—** / `0`.
+7. **Cadence collapse:** when **Runs (7d) ≥ 2** — flag on the row (see Status
+   / Cadence below). Retrospective by construction (counts files already on disk).
+8. Classify **status** (report only; 5-day threshold unchanged):
 
 | Status | Condition |
 |--------|-----------|
@@ -164,6 +171,10 @@ ls -1t "$path/.github/automation"/weekly_seo_*.md 2>/dev/null | head -1
 | `due` | Report exists and age **≥ 5** days |
 | `no report` | Path exists; automation dir missing **or** no `weekly_seo_*.md` |
 | `path missing` | `projects.path` not on disk |
+
+When cadence collapse applies, surface it on the row without replacing
+`fresh`/`due` — e.g. Status `fresh · cadence collapse` or a **Cadence** column
+value `collapse` (prefer one consistent style per board).
 
 ### 3. Last task activity (required on default board)
 
@@ -207,7 +218,8 @@ Sketch (adapt; keep local):
 
 ```python
 # 1) projects from list-projects JSON or sqlite
-# 2) for each: report glob → status fresh|due|no report|path missing
+# 2) for each: report glob → newest + Runs(7d) count → status fresh|due|no report|path missing
+#    + cadence collapse if Runs(7d) >= 2
 # 3) join task MAX(created_at) by project_id
 # 4) sort + print markdown table
 ```
@@ -222,16 +234,17 @@ Do not hand-edit invent rows.
 ```markdown
 # Weekly SEO status — {YYYY-MM-DD}
 
-| ID | Name | Last report | Report days | Status | Last activity | Activity days | Report file |
-|----|------|-------------|-------------|--------|---------------|---------------|-------------|
-| `days_to_expiry` | Days to Expiry | — | — | no report | 2026-07-27 18:29 | 1 | — |
-| `coffee` | Brewedlate | 2026-07-23 18:31 | 5 | due | … | … | `weekly_seo_….md` |
-| `learnedlate` | Learned Late | 2026-07-25 07:04 | 3 | fresh | … | … | `weekly_seo_….md` |
+| ID | Name | Last report | Report days | Runs (7d) | Status | Last activity | Activity days | Report file |
+|----|------|-------------|-------------|-----------|--------|---------------|---------------|-------------|
+| `days_to_expiry` | Days to Expiry | — | — | 0 | no report | 2026-07-27 18:29 | 1 | — |
+| `coffee` | Brewedlate | 2026-07-23 18:31 | 5 | 1 | due | … | … | `weekly_seo_….md` |
+| `learnedlate` | Learned Late | 2026-07-25 07:04 | 3 | 2 | fresh · cadence collapse | … | … | `weekly_seo_….md` |
 
 **Due (report ≥5d):** N  
 **No report:** N  
 **Fresh (report &lt;5d):** N  
-**Path missing:** N
+**Path missing:** N  
+**Cadence collapse (Runs 7d ≥ 2):** N
 ```
 
 **Report file** column: basename only (or short relative path). Full path only
@@ -278,16 +291,21 @@ If `due-only`: drop `fresh` rows from the table; keep summary counts for all.
 
 ## Alignment with weekly-seo skip policy
 
-| Signal | weekly-seo skip | this status board |
-|--------|-----------------|-------------------|
-| Last **report** &lt; 5 days | May skip | `fresh` |
-| Last **report** ≥ 5 days | Due | `due` |
+| Signal | weekly-seo | this status board |
+|--------|------------|-------------------|
+| Last **mode-executing report** &lt; 5 days | **Hard refusal** of mode execution (Phase 0); measure-only exempt; override = “run anyway” / “force weekly” | `fresh` (status still report-age only) |
+| Last **report** ≥ 5 days | Due for mode work | `due` |
 | No report file | Treat as not-fresh (run unless forced) | `no report` |
 | Task activity only | Not a skip reason by itself | **Last activity** column only |
-| ≥ 5 open fix-like tasks | May skip (weekly-seo) | Optional enrichment only |
+| ≥ 5 open fix-like tasks | May skip (load signal; unchanged) | Optional enrichment only |
+| **Runs (7d) ≥ 2** | weekly-seo hard-refuses *next* mode run if newest mode report &lt;5d; does not count 7d itself | **`cadence collapse`** flag + summary count (retrospective) |
 
-Same **5-day** threshold on **reports**. Task activity is context so the board
-does not lie when agents forgot the report file.
+Same **5-day** threshold on **reports** for `fresh`/`due`. weekly-seo promotes
+spacing to a **hard Phase 0 refusal** for mode-executing runs (measure-only
+exemption + explicit override). This board stays read-only: **Runs (7d)** and
+**cadence collapse** surface how often reports landed in the last week. Task
+activity is context so the board does not lie when agents forgot the report
+file.
 
 ---
 
@@ -307,7 +325,8 @@ does not lie when agents forgot the report file.
 - Read-only board across all projects.  
 - **Canonical key = `project.id`.**  
 - Report files drive `fresh` / `due` / `no report`.  
+- **Runs (7d)** from filename timestamps; **cadence collapse** when ≥ 2.  
 - Task `MAX(created_at)` always shown when available.  
-- 5-day report threshold matches weekly-seo.  
+- 5-day report threshold matches weekly-seo Phase 0 spacing.  
 - Never edit product crates or customer content during a status run.  
 - Do not auto-run weekly passes — only report and suggest `/weekly-seo <id>`.
