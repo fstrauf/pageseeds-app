@@ -2,7 +2,7 @@
 name: weekly-seo
 description: >-
   Run the weekly SEO pass for one PageSeeds project via pageseeds-cli
-  (desk reads → optional PostHog behavioral signals → ≤5 actions → report).
+  (desk reads → PostHog MCP behavioral desk → ≤5 actions → report).
   Use when the user wants weekly SEO, SEO maintenance, organic growth this
   week, or /weekly-seo. Operator only — never edit pageseeds-app source.
 when-to-use: >-
@@ -34,16 +34,20 @@ Prefer the **customer project** (cwd outside `pageseeds-app`). Requires
 Dev/checkout secondary: `pnpm install:cli` / `./scripts/install-cli.sh` (or `FROM_SOURCE=1`).
 
 You are the weekly SEO operator for **one** project. Find the highest-impact
-organic growth opportunity, propose ≤5 measures, execute via PageSeeds tasks —
-not by editing content or product source yourself.
+organic growth opportunity **within the program mode/queues**, propose ≤5
+measures, execute via PageSeeds tasks — not by editing content or product
+source yourself.
 
 | Layer | Role |
 |-------|------|
 | **Capability** | `pageseeds-cli` JSON tools (≈ MCP surface) |
-| **Optional signal** | PostHog MCP — light engagement desk only (see below) |
+| **Program ops SOT** | `<project>/.github/automation/seo_program.yaml` — mode + queues (see [SEO program](#seo-program-ops-seo_programyaml)) |
+| **Theme gates SOT** | `project.yaml` via `strategy` / `research-context` — Primary / ACTIVE / LEGACY |
+| **Behavioral desk** | PostHog MCP — expected light engagement desk (see [PostHog desk](#posthog-desk)); no CLI wrapper |
 | **Policy** | This skill — budgets, lifecycle, report, isolation |
 | **Agent** | You — choose tools within hard rails |
 | **Product source** | **Out of scope** — never patch `pageseeds-app` |
+| **Monthly rebalance** | `/seo-program-review` — not this skill |
 
 ---
 
@@ -56,9 +60,10 @@ not by editing content or product source yourself.
 
 | Role | Workspace | May write |
 |------|-----------|-----------|
-| **This skill** | Customer project / neutral cwd | Only weekly report under project automation |
+| **This skill** | Customer project / neutral cwd | Weekly report + **narrow** `seo_program.yaml` queue/status updates (see below) |
 | **pageseeds-cli** | N/A (binary on PATH) | Tasks/DB/content **via tools only** |
 | **Product engineer** | `pageseeds-app` (separate session) | App source / PRs |
+| **Program rebalance** | Customer project via `/seo-program-review` | Full `seo_program.yaml` + strategy `project.yaml` |
 
 If the session is inside the product repo (`pageseeds-app` + editing Rust/TS),
 **stop** and re-run with only the customer project open. Missing CLI features are
@@ -104,15 +109,17 @@ Breaking these fails the run.
 
 | # | Rule |
 |---|------|
-| 1 | **CLI only** for data/tasks (+ the report file), **except** the optional PostHog MCP desk. No direct DB writes, no hand-editing MDX. |
+| 1 | **CLI only** for data/tasks, **except** PostHog MCP desk + allowed automation file writes (weekly report; narrow `seo_program.yaml` statuses). No direct DB writes, no hand-editing MDX. No PostHog CLI wrap — MCP is the integration. |
 | 2 | **No product source edits** under `pageseeds-app` product crates (unless explicitly requested). |
 | 3 | **Missing capability → escalate**, don’t implement. Document gap; work around or stop that branch. |
 | 4 | **Budgets:** ≤**5** creates · ≤**15** executions · ≤**3** new articles from keyword selection. |
 | 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B write uses `write-context` / `write-submit`; Path B merge uses `merge-context` / `merge-submit`; Path B fix uses `fix-context` / `fix-submit`. |
 | 6 | **Evidence:** every task / major finding cites tool output (counts, slugs, URLs). |
 | 7 | **Reviews:** mechanical only; escalate judgment (high-traffic merges, strategic keywords). |
-| 8 | **Report only file write:** `weekly_seo_{YYYYMMDD_HHMMSS}.md` under `<project-path>/.github/automation/`. |
-| 9 | **Missing integrations:** GSC/Clarity/Reddit/PostHog fail or unavailable → degrade and say so; never fake data. |
+| 8 | **File writes:** (a) `weekly_seo_{YYYYMMDD_HHMMSS}.md` under automation; (b) **narrow** updates to `seo_program.yaml` only — queue item `status` / `target_slug` / short `notes` when you ship or claim work. **Do not** rewrite goal, metrics, mode mix, or invent Primary keywords mid-weekly (that is `/seo-program-review`). |
+| 9 | **Missing integrations:** GSC/Clarity/Reddit fail → degrade and say so; never fake data. |
+| 10 | **PostHog desk is default:** after GSC shortlist, run the light PostHog desk via MCP. **Only** source for project id: `project.yaml` → `posthog_project_id`. Assume MCP exists. If MCP missing, auth fails, or `posthog_project_id` absent → **WARN** in report + final message, continue on GSC only — no name/host guessing, no skill-side map, never invent engagement numbers. |
+| 11 | **Program mode:** When `seo_program.yaml` exists, lock **Mode** from `current_mode` (unless user forces another mode) and prefer draining matching queues over pure desk noise. Missing file → desk-default + note gap. |
 
 ### May-create via `create-task`
 
@@ -293,17 +300,73 @@ under soft path A.
 ## Soft guidance (default path)
 
 ```text
-recency → due content_outcome_review (≤1–2 if present) → refresh ground truth (if stale) → site-overview
+recency → load seo_program.yaml (mode + queues) → due content_outcome_review (≤1–2)
+  → refresh ground truth (if stale) → site-overview
   → articles / article / gsc-queries
   → optional striking-distance filter (when pos 7–13 inventory looks high-ROI)
-  → optional PostHog desk (if MCP available)
-  → ≤5 actions → report
+  → PostHog desk (default — project.yaml posthog_project_id → switch-project; WARN if missing)
+  → plan within Mode → ≤5 actions → update queue statuses → report
 ```
 
 Reorder/deepen when a clear anomaly appears (including optional
 [striking-distance preferred path](#striking-distance-preferred-path) when the
 band has meaningful inventory). Still honor hard rails and plan before mass
 create (interactive: approval; hands-off: short plan then go).
+
+### SEO program ops (`seo_program.yaml`)
+
+**Path:** `<project-path>/.github/automation/seo_program.yaml`  
+**Schema / full field guide:** [docs/SEO_PROGRAM.md](../../../docs/SEO_PROGRAM.md)  
+**Producer:** `/seo-program-review` (monthly). **This skill consumes** it weekly.
+
+Theme gates (Primary, ACTIVE/MAINTAIN/LEGACY, `do_not_expand`) remain in
+`project.yaml` / `pageseeds-cli strategy` — the program file does **not** replace
+them. It sequences **mode + queues** so weekly runs do not freestyle every time.
+
+#### Load (after recency, before desk deep-dive)
+
+1. Read `seo_program.yaml` if present (`schema_version`, `goal`, `current_mode`,
+   `mode_mix_this_month`, `primary_backlog`, `harvest_queue`, `tools_queue`,
+   `product_paths`, `metrics`, `last_reviewed_at`).
+2. **Lock Mode** for this run:
+
+| `current_mode` | Report label | Prefer |
+|----------------|--------------|--------|
+| `attract` | Mode A — Attract (Primary write) | Open `primary_backlog` → research-pull Primary/ACTIVE first → Path B write/publish/cluster |
+| `harvest` | Mode B — Harvest (TOFU → product) | `harvest_queue` + desk high-impr weak CTA → Path B fix (CTA/intro/links to `product_paths`) |
+| `tools` | Mode C — Tools / commercial | `tools_queue` → fix or write calculator/screener/dashboard/alternative pages |
+| `measure` | Mode D — Measure | Due outcome reviews + GSC movers + PostHog blog→signup; light creates only if critical |
+
+3. **Every week** still run measure as a **soft side-pass**: due
+   `content_outcome_review` ≤1–2 even when Mode is A/B/C.
+4. **User override:** “research week” / “fix week” / explicit mode → honor user;
+   note deviation from `current_mode` under Decisions.
+5. **Missing / unparseable file:** continue desk-default (research vs fix from
+   signals); state **“seo_program.yaml missing — desk-default mode”** in report.
+   Suggest `/seo-program-review` under Recommended next actions. Do not invent a
+   full program board mid-weekly.
+6. **Stale review:** if `last_reviewed_at` older than `review_cadence_days`
+   (default 30), one line under Recommended: run `/seo-program-review`.
+
+#### Mode vs desk (priority)
+
+1. Program mode + matching **open** queue items (with desk evidence).  
+2. Desk anomalies that are clearly higher ROI **and** still on-strategy
+   (not LEGACY / do_not_expand expansion).  
+3. Never expand beginner/tax LEGACY to “fill” a quiet attract week — prefer
+   harvest/tools or skip with honesty.
+
+#### End of run — narrow YAML updates only
+
+When you ship or claim work, update the matching queue row:
+
+- `status`: `open` → `in_progress` / `shipped` / `measuring` (if +30d outcome scheduled) / `done`
+- `target_slug` when a Primary keyword gains a live slug
+- short `notes` (one line)
+
+**Do not** change `goal`, `metrics`, `mode_mix_this_month`, `current_mode`, or
+cluster policy mid-weekly unless the user explicitly asks to advance mode
+(e.g. “set mode to harvest”). Full rebalance = `/seo-program-review`.
 
 ### A. Recency / load
 
@@ -353,7 +416,7 @@ separate `refresh_ground_truth` product; do not treat its absence as a blocker.
 | Live demand / deltas | `gsc-performance`, `gsc-movers`, `gsc-queries` (cheap ad-hoc truth) |
 | Stale snapshots / desk cache | `create-task -t collect_gsc` then **`execute-task` this run** if needed |
 | Clarity (if configured) | same pattern with `collect_clarity` |
-| PostHog (if MCP available) | Optional desk pass — see [PostHog desk (optional)](#posthog-desk-optional); not a CLI task |
+| PostHog behavioral | **Default** light desk after GSC shortlist — see [PostHog desk](#posthog-desk); MCP only, not a CLI task |
 
 - **Desk tape flag:** On `site-overview` / `articles`, read `freshness.stale` and `freshness.hint` before treating zero impressions/clicks as demand truth (empty/stale `gsc_page_daily` is not “no traffic”).
 
@@ -380,11 +443,16 @@ If GSC disconnected: continue on catalog/indexing tools only; note it.
 | Path B fix | `fix-context` / `fix-submit` — preferred targeted content/CTR edits; content kind schedules +30d outcome review; CTR records `ctr_outcomes` only |
 | Path B merge | `merge-context` / `merge-submit` — outer-agent merge after approved keep+redirects; successful submit schedules keeper outcome review (#203) |
 
+#### Behavioral desk (default — not GSC substitute)
+
+| Tool | Note |
+|------|------|
+| **PostHog MCP** | **Default** light engagement desk after GSC shortlist — see [PostHog desk](#posthog-desk). **Not** demand truth. **WARN** (do not invent data) if MCP missing or `project.yaml` lacks `posthog_project_id` |
+
 #### Optional / secondary (NOT ground truth, not required path)
 
 | Tool | Note |
 |------|------|
-| **PostHog MCP** (optional desk) | Behavioral / engagement signals for the same site — see [PostHog desk (optional)](#posthog-desk-optional). **Not** GSC substitute; skip if MCP or project missing |
 | `cannibalization-clusters` | Soft TF-IDF clusters — **fail open** on mono-niche; **not merge authority** |
 | `ctr-health` | Productized composite — prefer impressions/CTR from desk + `gsc-queries` |
 | `seo_health_scan` (task) | Optional backlog only when desk data is insufficient |
@@ -401,8 +469,10 @@ tool without a new hypothesis.
 1. **Wide:** `site-overview` (+ `gsc-movers` / `gsc-performance` if needed).  
 2. **Catalog:** `articles` for filters (high impressions, low CTR, status).  
 3. **Deep:** `article -S <slug>` + `gsc-queries -u <url>` on top candidates.  
-4. **Optional PostHog desk** (if MCP available): engagement / bounce / top paths
-   for the same site — weave into ranking, never invent SEO demand from it.  
+4. **PostHog desk (default):** read `posthog_project_id` from `project.yaml` →
+   `switch-project` → light bounce / engagement / top paths — weave into
+   ranking; never invent SEO demand from it. If id missing or MCP blocked →
+   **WARN** and continue GSC-only.  
 5. **Act** only with evidence; gap growth → research (below).
 
 #### Soft hints (priors only — never forced weekly actions)
@@ -485,38 +555,59 @@ JSON reports `scored` / `skipped_fresh` / `skipped_cap` / `skipped_budget` /
 bucket/reason. Do **not** re-score every weekly pass; prefer `--from-cache`
 first. Counts toward ≤5 creates only if you act; inventory note-only is fine.
 
-### PostHog desk (optional)
+### PostHog desk
 
 **Role:** light **behavioral / engagement** signal next to GSC demand — not a
 second ground truth, not a full product weekly review (that is
 `posthog-weekly-insights`). Use only to **re-rank or strengthen** SEO actions
-already justified by desk/GSC evidence.
+already justified by desk/GSC evidence. **No CLI wrapper** — PostHog is MCP-only.
 
-**When to run (default: try once, then skip if blocked):**
+**Assumption:** PostHog MCP is available in operator sessions. Do **not** design
+the happy path around “maybe no MCP.” Treat absence as a **warn + continue**
+failure mode, not a normal skip.
+
+**When to run (default path — after primary GSC desk / shortlist):**
 
 | Condition | Action |
 |-----------|--------|
-| PostHog MCP available in this session | Run the light desk below after primary GSC desk |
-| MCP missing / auth fail / no matching project | Skip; note under Skipped in the report — continue on CLI desk only |
-| User says “skip PostHog” / “SEO only” | Skip without probing |
+| Normal weekly run **and** `posthog_project_id` present | **Always** run the light desk below after GSC shortlist |
+| User says “skip PostHog” / “SEO only” | Skip without probing; note under Skipped |
 | User wants deep product analytics | Point them to `posthog-weekly-insights`; do **not** expand this pass |
+| MCP missing / not connected / auth fail | **WARN** (report + final message); continue GSC-only — never invent data |
+| `posthog_project_id` missing / empty | **WARN** — missing config; **do not** guess, match by name/host, or use any skill-side map; continue GSC-only |
+| Id present but switch/query fails | **WARN** with error; continue GSC-only |
 
-**Project selection (mandatory before queries):**
+#### Config (only path — no fallbacks)
 
-1. Resolve the PageSeeds site from setup / `list-projects` / `site-overview`
-   (name + public host, e.g. `expensesorted.com`).
-2. Via PostHog MCP (`posthog__exec` / `posthog:exec`):
-   - `call projects-get {}` or `call organizations-list {}` → list projects.
-   - Match by **name** or known host/domain against the PageSeeds project.
-   - If needed: `call switch-project {"projectId": <id>}` (use schema from
-     `info switch-project` if unsure).
-3. **Ambiguous or no match → skip** PostHog for this run (do not query the
-   wrong product’s events). State the mismatch in the report.
+**Single source of truth:** one field on the existing project config:
+
+```yaml
+# <project-path>/.github/automation/project.yaml
+schema_version: 1
+product_name: Expense Sorted
+posthog_project_id: "131482"   # required for PostHog desk; numeric PostHog project id
+# … search_keywords, clusters, reddit …
+```
+
+| Rule | Detail |
+|------|--------|
+| **Required for desk** | `posthog_project_id` in `project.yaml` |
+| **Not allowed** | Skill fleet tables, `posthog.yaml`, name/host fuzzy match, “whatever MCP has open,” inventing ids |
+| **If missing** | **WARN** + GSC-only — fail the PostHog branch cleanly; do not invent a second config path |
+
+#### Project selection (mandatory before queries)
+
+1. Read `posthog_project_id` from
+   `<project-path>/.github/automation/project.yaml`.
+2. Missing / empty → **WARN**, stop PostHog for this run (no further MCP
+   project discovery).
+3. **Always** `call switch-project {"projectId": <id>}` before queries (use
+   `info switch-project` if schema unsure). Never query without switching.
 4. Confirm taxonomy before querying:  
    `call read-data-schema {"query":{"kind":"events"}}`  
    Never assume `$pageview` / property names without schema confirmation.
 
-**Light desk (≤ ~4–6 MCP calls total — counts toward exploration budget):**
+#### Light desk (≤ ~4–6 MCP calls total — counts toward exploration budget)
 
 Prefer web-analytics style tools when present; fall back to trends after schema:
 
@@ -546,10 +637,13 @@ Always prefer `filterTestAccounts` / project defaults that exclude internal user
 
 **Anti-patterns:**
 
-- Full PostHog weekly product review mid SEO pass
+- Treating “PostHog optional / skip if inconvenient” as the happy path
+- Fleet maps, name/host matching, or any fallback when `posthog_project_id` is missing
+- Full PostHog weekly product review mid SEO pass (`posthog-weekly-insights`)
 - Querying the wrong PostHog project “because something returned data”
 - Inventing SEO demand from DAU/pageviews alone
 - Burning exploration budget on replay deep-dives
+- Building a pageseeds-cli PostHog collect task for this skill path
 
 
 ### Research strategy package (#141 / #255 / #275)
@@ -564,12 +658,14 @@ pageseeds-cli research-pull -i <id> -p <path> --seeds "theme one,theme two" ...
 
 Prefer this over relying solely on nested research_seed_extraction when tools exist.
 
-**Week mode (soft prior for *what* to do; hard for *seed source* when researching):**
+**Week mode (program-first when `seo_program.yaml` exists; else soft prior):**
 
 | Week mode | When | Seed / action rule |
 |-----------|------|-------------------|
-| **CTR / fix week** | High-impr low-CTR waste, striking-distance, hard cannibal, indexing | Prefer Path B fix / targeted creates — **unchanged**. Territory shortlist + desk are judgment aids for **existing** pages. |
-| **Research week** | Choosing to create ≤3 **new** articles (gap growth) | `research-pull -K` seeds **must** come from `content_strategy.primary_keywords` + **ACTIVE** cluster keywords first (intentional **PLANNED** pillar OK). Territory / shortlist pending seeds only if strategy empty **or** Primary/ACTIVE exhausted/covered. |
+| **Attract / research** (`current_mode: attract` or user research week) | New articles | Seeds from **open `primary_backlog`** first, then `content_strategy.primary_keywords` + **ACTIVE** clusters (intentional **PLANNED** OK). Territory/shortlist only if strategy empty **or** Primary/ACTIVE exhausted/covered. |
+| **Harvest / CTR fix** (`current_mode: harvest` or fix week) | High-impr low-CTR, harvest_queue, striking-distance, cannibal, indexing | Prefer Path B fix on queue + desk waste URLs. Territory shortlist aids **existing** pages only. |
+| **Tools** (`current_mode: tools`) | Commercial / calculator / screener | Prefer `tools_queue` + product routes; still honor strategy gates. |
+| **Measure** (`current_mode: measure`) | Closed-loop week | Outcome reviews + scoreboard signals; not a research dump. |
 
 **Explicit ban:** Do **not** treat “top shortlist by impressions / promising” as default new-article seeds when Primary or ACTIVE keywords exist in the package.
 
@@ -635,10 +731,12 @@ pick only `differentiate` / `target` rows when possible. Residual avoids = last 
 
 ## D. Plan
 
-| Finding | Evidence (tool + numbers/slugs) | Proposed task | Why this week |
+**State Mode first** (from program or override), then:
+
+| Finding | Evidence (tool + numbers/slugs) | Queue item (if any) | Proposed task | Why this week |
 
 - Interactive: one approval per project. Hands-off: state plan, proceed.  
-- Max **5** creates; impact first.
+- Max **5** creates; impact first; prefer open program queue items on-mode.
 
 ---
 
@@ -717,11 +815,14 @@ session prose + write-submit — **not** nested `execute-task write_article`
 
 ```bash
 # 1. Package (deterministic — no LLM)
+# Classic: after select-keywords (keyword on research selection list)
 pageseeds-cli write-context -i <id> -p <path> \
   -I <research-task-id> -K "<keyword>"
-# → JSON: content_brief, target_file, target_path, publish_date,
-#   skill_name + skill_content (content-write craft rules),
-#   min_words 800, target_words 1200, write_task_id (if any)
+# Intentional Primary (Mode A): keyword ∈ project.yaml Primary/problem —
+# no Ahrefs selection membership; -I optional
+pageseeds-cli write-context -i <id> -p <path> -K "per-leg P&L options"
+# → JSON: content_brief, auth_source (research_selection |
+#   strategy_primary_or_problem), target_file, skill_content, write_task_id
 
 # 2. Session agent writes full MDX to target_file using skill_content + brief
 #    (min 800 words, proper frontmatter title/description/slug/date, H1, links)
@@ -831,18 +932,26 @@ operator runbook: `.agents/skills/video-clip/SKILL.md`.
 # Weekly SEO — {project name}
 
 **Date:** {ISO timestamp}
+**Mode:** {A Attract | B Harvest | C Tools | D Measure} — source: seo_program.yaml `current_mode`={…} | user override | desk-default (file missing)
 
 ## Summary
-2–3 sentences: biggest finding and what was done.
+2–3 sentences: biggest finding and what was done (tie to mode/queues).
+
+## Program
+- Goal (one line from seo_program.yaml) or “no program file”
+- Queues touched: primary/harvest/tools rows claimed or status-updated
+- last_reviewed_at / stale review warning if any
 
 ## Exploration path
 Desk path chased, detours, what you skipped (and why).
-Include whether PostHog desk ran (which PostHog project) or was skipped.
+Include PostHog desk outcome: ran (`posthog_project_id=…`) **or**
+**WARN** reason (`posthog_project_id` missing / MCP missing / switch failed /
+user skip).
 
-## PostHog signals (if run)
+## PostHog signals
 1–5 bullets: bounce/engagement/CWV or path findings **only where they
-intersect SEO candidates**. If skipped: one line why (no MCP / no project
-match / user skip).
+intersect SEO candidates**. If blocked: one bold **WARN** line
+(`posthog_project_id` missing / MCP / auth / user skip) — never invent metrics.
 
 ## Measures taken
 | Measure | Evidence | Task | Outcome |
@@ -863,7 +972,8 @@ match / user skip).
 
 ## Skipped (and why)
 - Including research skip vs “not run” honesty rule.
-- PostHog skip reason if not already covered above.
+- PostHog **WARN** / skip reason if not already covered above (missing
+  `posthog_project_id` is a config fail for that branch).
 - Soft desk signals noticed (zero-impr / striking / hard-cannibal counts) or degraded/empty (e.g. `gsc_missing`).
 - Striking-distance candidates seen but not acted on (and why — budget, better lever, stale tape, thin evidence).
 - Future `not_before` `content_outcome_review` rows left for later (do not execute early).
@@ -871,6 +981,8 @@ match / user skip).
 ## Product / CLI gaps (if any)
 - Real product/CLI gaps only (missing tools, auth). Desk tape refresh is
   `collect_gsc` + execute — not blocked on a `refresh_ground_truth` product.
+- PostHog MCP missing or missing `posthog_project_id` → **WARN** and fix
+  `project.yaml` — no skill fallbacks, no CLI `collect_posthog`.
 
 ## Recommended next actions
 …
@@ -885,9 +997,11 @@ match / user skip).
 ```
 ## Weekly SEO — {project name} ({date})
 
+**Mode:** … (program | override | desk-default)
+
 **TL;DR:** …
 
-**Exploration:** one line (desk path; PostHog on/skipped)
+**Exploration:** one line (desk path; PostHog project id or **WARN: …**)
 
 **Done**
 - …
@@ -922,10 +1036,11 @@ match / user skip).
 - Low CTR → desk-selected `fix_content_article` (`-S`); not default full `ctr_audit`.  
 - Not-indexed → desk-selected `fix_indexing_internal_links` / `fix_content_article -S`; not default full `indexing_health_campaign`.  
 - Empty research shortlist → call `research-context` first (auto-refresh); `update_research_shortlist` only if force/fail. 
-- **PostHog optional:** light engagement desk only; GSC = demand authority; wrong project / no MCP → skip and say so.  
+- **PostHog default desk:** light engagement via MCP after GSC shortlist; **only** `project.yaml` `posthog_project_id` → `switch-project`; missing id or MCP → **WARN** + GSC-only (no fallbacks); GSC = demand authority; never invent data; no CLI wrap.  
 - Evidence required; no invented data; no illegal create-task types.  
 - Soft clusters **not** ground truth / merge authority.  
-- Mechanical reviews only; only write the weekly report file.  
+- Mechanical reviews only; file writes = weekly report + narrow `seo_program.yaml` status updates.  
+- **Program mode** from `seo_program.yaml` when present; missing → desk-default + note; monthly rebalance = `/seo-program-review`.  
 - Idempotent re-runs: recency + spawner keys.  
 - **Video clips are elective via `/video-clip`**; not weekly spine / not may-create.
 
@@ -965,11 +1080,12 @@ only — no auto bulk noindex. Bucket → human compose: Avoid
 merge/noindex-with-confirm; Differentiate `fix_content_article -S` ($0); Target
 link boost / fix.
 
-**PostHog (optional MCP):** same-session behavioral layer after GSC desk —
+**PostHog (default MCP desk):** same-session behavioral layer after GSC desk —
 bounce, engagement, top paths, light CWV — used only to re-rank SEO candidates
 or flag product friction. Not a CLI tool, not demand truth, not
-`posthog-weekly-insights`. Project must match the PageSeeds site or the pass
-is skipped.
+`posthog-weekly-insights`. **Only** config: **`project.yaml` →
+`posthog_project_id`**. Always `switch-project` before query. No fleet maps or
+name matching. Missing id or MCP → **WARN + GSC-only**, never silent skip.
 
 **Dual-path freshness:** live ad-hoc probes (`gsc-performance` / `gsc-movers` /
 `gsc-queries`) remain available; desk tape is refreshed by `collect_gsc` +
@@ -980,3 +1096,8 @@ exposes `freshness.stale` / `freshness.hint` (and `evidence_coverage`) on
 
 **MCP (#92):** mount **desk tools first**; skill = operator policy. Tighten soft
 guidance if agents thrash — not hard rails first.
+
+**SEO program ops:** `seo_program.yaml` is the multi-week mode/queue SOT
+(schema [docs/SEO_PROGRAM.md](../../../docs/SEO_PROGRAM.md)). Weekly locks
+`current_mode` and drains queues; `/seo-program-review` rewrites the board
+monthly. Theme gates stay in `project.yaml` — do not re-encode Primary in prose.

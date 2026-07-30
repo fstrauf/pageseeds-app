@@ -30,6 +30,7 @@ Parse/load is **best-effort and never fails research**. Gates remain no-op when 
 | Item | Path | Role |
 |------|------|------|
 | **Structured SOT** | `{repo}/.github/automation/project.yaml` | `ProjectConfig` v1: search keywords, clusters, Reddit knobs |
+| **SEO program ops** | `{repo}/.github/automation/seo_program.yaml` | Mode + Primary/harvest/tools queues + metrics — **not** theme gates; see [SEO_PROGRAM.md](./SEO_PROGRAM.md) |
 | **Prose / brand** | `{repo}/.github/automation/project.md` | Prompt context (summary, brand voice) — not strategy field SOT |
 | **Reply safety** | `{repo}/.github/automation/reddit/_reply_guardrails.md` | Reddit reply constraints |
 | **Legacy (migrate only)** | `reddit_config.md` (+ MD strategy sections in `project.md`) | Import source for `migrate-project-config` |
@@ -80,6 +81,7 @@ Git cannot re-include a file under an ignored parent: a lone `!.github/automatio
 !.github/
 !.github/automation/
 !.github/automation/project.yaml
+!.github/automation/seo_program.yaml
 !.github/automation/project.md
 ```
 

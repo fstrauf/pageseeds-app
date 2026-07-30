@@ -86,14 +86,19 @@ Canonical per-article fix pipeline: context → `Extractor<T>` generate → appl
 
 ## Operator Skills (Not Rust Orchestrators)
 
-Weekly SEO, Reddit engage, and video clips are **agent skills**, not in-repo schedulers:
+Weekly SEO, SEO program review, Reddit engage, and video clips are **agent skills**, not in-repo schedulers:
 
 | Skill | Canonical path |
 |-------|----------------|
 | Weekly SEO | `.agents/skills/weekly-seo/SKILL.md` |
 | Weekly SEO status | `.agents/skills/weekly-seo-status/SKILL.md` |
+| SEO program review (monthly) | `.agents/skills/seo-program-review/SKILL.md` |
 | Reddit engage | `.agents/skills/reddit-engage/SKILL.md` |
 | Video clip | `.agents/skills/video-clip/SKILL.md` |
+
+**SEO ops layering:** `project.yaml` = theme gates (Primary / clusters / do_not_expand).  
+`seo_program.yaml` = multi-week mode + queues ([docs/SEO_PROGRAM.md](./docs/SEO_PROGRAM.md)).  
+Weekly skill consumes program; `/seo-program-review` rewrites it.
 
 Discovery symlinks (edit only the `.agents` files):
 

@@ -47,6 +47,10 @@ pub struct ProjectConfig {
     pub schema_version: u32,
     #[serde(default)]
     pub product_name: Option<String>,
+    /// PostHog project id for weekly SEO behavioral desk (MCP `switch-project`).
+    /// Numeric id as string (e.g. `"131482"`). Sole config path — no skill fallbacks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posthog_project_id: Option<String>,
     #[serde(default)]
     pub search_keywords: SearchKeywords,
     #[serde(default)]
@@ -60,6 +64,7 @@ impl Default for ProjectConfig {
         Self {
             schema_version: SUPPORTED_SCHEMA_VERSION,
             product_name: None,
+            posthog_project_id: None,
             search_keywords: SearchKeywords::default(),
             clusters: Vec::new(),
             reddit: ProjectRedditConfig::default(),
@@ -237,6 +242,7 @@ impl ProjectConfig {
         Self {
             schema_version: SUPPORTED_SCHEMA_VERSION,
             product_name: None,
+            posthog_project_id: None,
             search_keywords: SearchKeywords::from(strategy),
             clusters: strategy.clusters.clone(),
             reddit: ProjectRedditConfig::default(),
@@ -294,6 +300,7 @@ mod tests {
         ProjectConfig {
             schema_version: 1,
             product_name: Some("PageSeeds".into()),
+            posthog_project_id: Some("131482".into()),
             search_keywords: SearchKeywords {
                 primary: vec!["seo automation".into()],
                 problem: vec!["manual seo workflows".into()],
@@ -354,6 +361,7 @@ mod tests {
 
         assert_eq!(original.schema_version, SUPPORTED_SCHEMA_VERSION);
         assert_eq!(original.product_name, None);
+        assert_eq!(original.posthog_project_id, None);
         assert!(original.search_keywords.primary.is_empty());
         assert!(original.clusters.is_empty());
         assert_eq!(original.reddit.mention_stance, MentionStance::Optional);
@@ -362,6 +370,30 @@ mod tests {
         save_project_config(&path, &original).unwrap();
         let loaded = load_project_config(&path).unwrap();
         assert_eq!(loaded, original);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn posthog_project_id_round_trips() {
+        let dir = temp_dir("posthog_id");
+        let path = project_config_path(&dir);
+        let yaml = "\
+schema_version: 1
+product_name: Expense Sorted
+posthog_project_id: \"131482\"
+search_keywords:
+  primary: []
+";
+        std::fs::write(&path, yaml).unwrap();
+        let loaded = load_project_config(&path).unwrap();
+        assert_eq!(loaded.posthog_project_id.as_deref(), Some("131482"));
+
+        save_project_config(&path, &loaded).unwrap();
+        let reloaded = load_project_config(&path).unwrap();
+        assert_eq!(reloaded.posthog_project_id.as_deref(), Some("131482"));
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("posthog_project_id"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
