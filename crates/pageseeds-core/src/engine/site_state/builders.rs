@@ -65,9 +65,10 @@ pub fn build_site_overview(
     let mut movers: Vec<TopMover> = Vec::new();
     let mut has_any_gsc = false;
     let mut multi_url_slug_count = 0_usize;
-    // Collect zero-impression / striking candidates during the same live pass (#204).
+    // Collect zero-impression / striking / declining candidates during the same live pass (#204 / #305).
     let mut zero_impression_candidates: Vec<ZeroImpressionSample> = Vec::new();
     let mut striking_candidates: Vec<StrikingDistanceSample> = Vec::new();
+    let mut declining_candidates: Vec<DecliningPagesSample> = Vec::new();
 
     for article in &live {
         let slug = normalize_url_slug(&article.url_slug);
@@ -135,6 +136,23 @@ pub fn build_site_overview(
                         impressions_delta,
                         direction: mover_direction(clicks_delta),
                     });
+                }
+
+                // Declining pages: significant impression decay recent vs prior (#305).
+                // Missing prior window → not a candidate (empty inventory when none qualify).
+                if b.impressions >= DECLINING_MIN_PREV_IMPRESSIONS {
+                    let drop_pct = (b.impressions - r.impressions) / b.impressions;
+                    if drop_pct >= DECLINING_IMPRESSIONS_DROP_PCT {
+                        declining_candidates.push(DecliningPagesSample {
+                            slug: slug.clone(),
+                            title: Some(article.title.clone()),
+                            prev_impressions: b.impressions,
+                            recent_impressions: r.impressions,
+                            impressions_delta,
+                            drop_pct,
+                            clicks_delta,
+                        });
+                    }
                 }
             }
         }
@@ -225,6 +243,19 @@ pub fn build_site_overview(
         sample: striking_candidates,
     };
 
+    // Declining: largest impression losses first; sample capped (#305).
+    declining_candidates.sort_by(|a, b| {
+        a.impressions_delta
+            .partial_cmp(&b.impressions_delta)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let declining_count = declining_candidates.len();
+    declining_candidates.truncate(OVERVIEW_INVENTORY_SAMPLE_CAP);
+    let declining_pages = DecliningPagesInventory {
+        count: declining_count,
+        sample: declining_candidates,
+    };
+
     let hard_cannibalization = build_hard_cannibalization_inventory(conn, project_id, &articles);
 
     // Residual equity on redirect sources + never-catalog high-impr GSC (#261).
@@ -250,6 +281,7 @@ pub fn build_site_overview(
         multi_url_slug_count,
         &zero_impression,
         &striking_distance,
+        &declining_pages,
         &hard_cannibalization,
         &redirect_equity,
         &non_catalog_gsc,
@@ -282,6 +314,7 @@ pub fn build_site_overview(
         hard_cannibalization,
         redirect_equity,
         non_catalog_gsc,
+        declining_pages,
         outcomes,
         hints,
     })
@@ -927,6 +960,7 @@ fn build_hints(
     multi_url_slug_count: usize,
     zero_impression: &ZeroImpressionInventory,
     striking_distance: &StrikingDistanceInventory,
+    declining_pages: &DecliningPagesInventory,
     hard_cannibalization: &HardCannibalizationInventory,
     redirect_equity: &RedirectEquityInventory,
     non_catalog_gsc: &NonCatalogGscInventory,
@@ -949,12 +983,15 @@ fn build_hints(
             "GSC multi-URL inventory: {multi_url_slug_count} catalog slugs map to >1 page URL"
         ));
     }
-    // Inventory flags: one short string per non-empty, non-degraded set (#204).
+    // Inventory flags: one short string per non-empty, non-degraded set (#204 / #305).
     if zero_impression.count > 0 && zero_impression.degraded_reason.is_none() {
         hints.push("Zero-impression published inventory present".into());
     }
     if striking_distance.count > 0 {
         hints.push("Striking-distance pages present".into());
+    }
+    if declining_pages.count > 0 {
+        hints.push("Declining-impression pages present".into());
     }
     if hard_cannibalization.count > 0 && hard_cannibalization.degraded_reason.is_none() {
         hints.push("Hard same-query cannibal samples present".into());
