@@ -2,9 +2,9 @@
 
 Operator rollout checklist for **epic #273**. Ensures each customer site’s content strategy is machine-readable so hard gates and ACTIVE rank boosts actually fire.
 
-> **Source of truth:** module docs + parse contract in `crates/pageseeds-core/src/strategy/mod.rs` (loader `load_project_strategy`; fixture ~lines 773–805). Do **not** invent new tokens or heading levels outside that contract.
+> **Source of truth:** module docs + parse contract in `crates/pageseeds-core/src/strategy/mod.rs` (loader `load_project_strategy`; unit-test `FIXTURE` and `StrategyLoadStatus`). Do **not** invent new tokens or heading levels outside that contract.
 
-This is **operator config + verification**, not a product feature change. Fail-loud empty strategy (#276) is out of scope here.
+This is **operator config + verification**, not a product feature change. Strategy load quality is already reported as `empty` | `partial` | `ok` (#276); gates still no-op on empty — operators must verify status, not expect a hard fail.
 
 ---
 
@@ -14,10 +14,10 @@ Strategy hard gates and ACTIVE rank boosts only apply when `{repo}/.github/autom
 
 | If strategy is… | What the product does |
 |-----------------|------------------------|
-| **Empty** (missing file, wrong structure, no recognized sections) | All hard gates **no-op**. `apply_strategy_filter` early-returns when `is_empty()` — every candidate kept as `StrategyRank::Neutral`. `strategy_blocks_expansion` returns `false`. |
-| **Partial / ok** | `do_not_expand` + LEGACY hard-drop seeds/themes; ACTIVE/primary get `StrategyRank::ActiveBoost`; MAINTAIN deprioritizes new seeds. Path B injects Primary/ACTIVE bullets as shortlist fuel. |
+| **Empty** (missing file, wrong structure, no recognized sections) | All hard gates **no-op**. `apply_strategy_filter` early-returns when `is_empty()` — every candidate kept as `StrategyRank::Neutral`. `strategy_blocks_expansion` returns `false`. Load quality: `StrategyLoadStatus::Empty` / `content_strategy.status: "empty"`. |
+| **Partial / ok** | `do_not_expand` + LEGACY hard-drop seeds/themes; ACTIVE/primary get `StrategyRank::ActiveBoost`; MAINTAIN deprioritizes new seeds. Path B injects Primary/ACTIVE bullets as shortlist fuel. Load quality: `partial` or `ok` on `content_strategy.status`. |
 
-Parse is **best-effort and never fails research**. Empty strategy is a silent no-op today (loud empty status is #276 — separate ticket).
+Parse is **best-effort and never fails research**. Gates remain no-op when strategy is empty. **#276** is the existing load-quality status signal (`StrategyLoadStatus` / `content_strategy.status` as `empty` | `partial` | `ok` on research-context) — **not** a hard-fail. Operators verify via `research-context` → `content_strategy.status` (and the free `strategy` command).
 
 ---
 
@@ -33,13 +33,26 @@ Other prose in `project.md` is fine; only recognized `##` / `###` sections feed 
 
 ### gitignore
 
-If `.github/automation/` (or the whole `.github/`) is gitignored, **force-include** the strategy file so it ships with the content repo:
+If `.github/automation/` (or the whole `.github/`) is gitignored, **force-include** the strategy file so it ships with the content repo.
+
+Git cannot re-include a file under an ignored parent: a lone `!.github/automation/project.md` is **not** enough when a parent path is ignored. Un-ignore each ancestor first, then the file. Match the chain to **your** ignore pattern:
+
+**Parent `.github/` ignored** (or broader ignore covering it):
 
 ```gitignore
+!.github/
+!.github/automation/
 !.github/automation/project.md
 ```
 
-Without this, local gates may work while CI/other clones see empty strategy.
+**Only `.github/automation/` ignored** (`.github/` itself still tracked):
+
+```gitignore
+!.github/automation/
+!.github/automation/project.md
+```
+
+Variants such as `!.github/automation/*` plus an explicit file rule also work — use whatever matches how the parent was ignored. Without a correct chain, local gates may work while CI/other clones see empty strategy.
 
 ---
 
@@ -124,15 +137,16 @@ pageseeds-cli research-context -i <project_id>
 - ≥1 **primary** keyword and/or ≥1 **ACTIVE** cluster with seed-phrase bullets.
 - `do_not_expand` bullets are short phrases — spot-check **length of each bullet** (reject multi-sentence policy dumps).
 - Clusters you care about show status `active` / `maintain` / `legacy` / `planned` in JSON (not all `unknown`).
-- Empty / missing sections → empty strategy → gates no-op (fix structure, not the CLI).
+- `research-context` → `content_strategy.status` is `ok` (or at least `partial` with the sections you care about populated) — not `empty`.
+- Empty / missing sections → empty strategy → gates no-op; status reports `empty` (fix structure + re-check `content_strategy.status`).
 
-`strategy` is free / read-only; see [CLI_COMMERCIAL.md](./CLI_COMMERCIAL.md).
+`strategy` and `research-context` are free / read-only; see [CLI_COMMERCIAL.md](./CLI_COMMERCIAL.md).
 
 ---
 
 ## Template (test fixture shape)
 
-Canonical structure from strategy unit tests (`strategy/mod.rs` FIXTURE). Copy and edit names/phrases per site:
+Canonical structure from strategy unit tests (`strategy/mod.rs` `FIXTURE` constant). Copy and edit names/phrases per site:
 
 ```markdown
 # Example Project
@@ -174,14 +188,14 @@ Canonical structure from strategy unit tests (`strategy/mod.rs` FIXTURE). Copy a
 ## Operator checklist (per site)
 
 1. [ ] Confirm path: `.github/automation/project.md` in the **content** repo.
-2. [ ] If automation is gitignored, add `!.github/automation/project.md`.
+2. [ ] If `.github/` or `.github/automation/` is gitignored, add the **full un-ignore chain** (ancestors + file) — see [gitignore](#gitignore); a lone `!.github/automation/project.md` is not enough under an ignored parent.
 3. [ ] `## Search Keywords` (H2) with `### Primary Keywords` bullets (seed phrases).
 4. [ ] `do_not_expand` section with **short** ban phrases only.
 5. [ ] `## Content Clusters…` (H2) with `### Cluster N: Name (STATUS)` and seed bullets.
 6. [ ] Money / high-impr pillars → **MAINTAIN** (or ACTIVE if still growing), **not** LEGACY.
 7. [ ] Dead lines → LEGACY with multi-token names and/or explicit bullets; optional overlap with `do_not_expand`.
 8. [ ] Run `pageseeds-cli strategy -p .` — non-empty primary and/or ACTIVE clusters.
-9. [ ] Spot-check `research-context` package `content_strategy` when researching.
+9. [ ] Spot-check `research-context` → `content_strategy.status` (`ok` / `partial` / not `empty`) and summary fields when researching.
 
 ---
 
@@ -189,9 +203,9 @@ Canonical structure from strategy unit tests (`strategy/mod.rs` FIXTURE). Copy a
 
 | Doc / issue | Role |
 |-------------|------|
-| `crates/pageseeds-core/src/strategy/mod.rs` | Parse contract, match policy, filter ranks |
+| `crates/pageseeds-core/src/strategy/mod.rs` | Parse contract, match policy, filter ranks, `StrategyLoadStatus` / `FIXTURE` |
 | [WORKFLOW_ENGINE.md](./WORKFLOW_ENGINE.md) — Topic Health | How strategy injects into shortlist / Path B |
 | [CLI_GETTING_STARTED.md](./CLI_GETTING_STARTED.md) | Install + setup |
 | [CLI_COMMERCIAL.md](./CLI_COMMERCIAL.md) | `strategy` / `research-context` free tools |
 | Epic #273 | Parent operator rollout |
-| #276 | Fail-loud empty strategy (product; not this checklist) |
+| #276 | Load-quality status `empty` \| `partial` \| `ok` on research-context (`content_strategy.status`); **not** a hard-fail — gates still no-op on empty |
