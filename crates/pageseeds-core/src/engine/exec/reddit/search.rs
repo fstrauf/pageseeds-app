@@ -1,7 +1,4 @@
-use super::{
-    extract_user_context_from_description, load_search_params_from_artifact,
-    load_search_params_from_project_config,
-};
+use super::resolve_search_params;
 use crate::models::task::Task;
 use rusqlite::Connection;
 use std::collections::HashSet;
@@ -119,27 +116,13 @@ pub(crate) async fn exec_reddit_search(
         handled_ids.len()
     );
 
-    // Happy path: structured params artifact from reddit_config_parse_stage
-    let params = load_search_params_from_artifact(task, project_path);
-
-    // Fallback: ProjectConfig via ensure (not live MD parse)
-    let params = match params {
-        Some(p) => p,
-        None => {
-            log::info!(
-                "[reddit_search] no structured params artifact found, falling back to ProjectConfig"
-            );
-            match load_search_params_from_project_config(
-                project_path,
-                extract_user_context_from_description(task),
-            ) {
-                Ok(p) => p,
-                Err(e) => {
-                    return crate::engine::workflows::StepResult::fail(format!(
-                        "project config unavailable for Reddit search: {e}"
-                    ));
-                }
-            }
+    // Artifact first, then ProjectConfig/YAML (not live MD parse)
+    let params = match resolve_search_params(task, project_path) {
+        Ok(p) => p,
+        Err(e) => {
+            return crate::engine::workflows::StepResult::fail(format!(
+                "project config unavailable for Reddit search: {e}"
+            ));
         }
     };
 
@@ -364,7 +347,7 @@ pub(crate) async fn exec_reddit_search(
                 "accessibility_score": accessibility,
                 "final_score": final_score,
                 "severity": severity,
-                "mention_stance": mention_stance,
+                "mention_stance": mention_stance.as_str(),
             }));
         }
         log::info!(

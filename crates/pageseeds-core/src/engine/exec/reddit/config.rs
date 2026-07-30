@@ -1,5 +1,6 @@
 use crate::models::task::Task;
 use crate::project_config::{ensure_project_config, ProjectConfig};
+use crate::reddit::config::MentionStance;
 use std::path::Path;
 
 // ─── Structured Config (from project.yaml via ensure) ─────────────────────────
@@ -7,10 +8,16 @@ use std::path::Path;
 /// Structured Reddit search parameters for the opportunity-search pipeline.
 /// Produced by the deterministic `reddit_config_parse_stage` step from
 /// [`ProjectConfig`] (YAML via [`ensure_project_config`]).
+///
+/// `mention_stance` is typed as [`MentionStance`]. Artifact JSON uses UPPERCASE
+/// tokens (`"RECOMMENDED"`) for wire compatibility with historical artifacts and
+/// DB consumers; deserialize also accepts snake_case (`"recommended"`).
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
 pub struct RedditSearchParams {
     pub product_name: Option<String>,
-    pub mention_stance: String,
+    #[serde(with = "mention_stance_artifact")]
+    #[schemars(with = "String")]
+    pub mention_stance: MentionStance,
     pub trigger_topics: Vec<String>,
     pub query_keywords: Vec<String>,
     pub seed_subreddits: Vec<String>,
@@ -21,11 +28,33 @@ pub struct RedditSearchParams {
     pub user_context: Option<String>,
 }
 
+/// Serde adapter: artifact/DB wire form is UPPERCASE via [`MentionStance::as_str`].
+/// Accepts both UPPERCASE and snake_case on deserialize ([`MentionStance::from_str`]).
+mod mention_stance_artifact {
+    use crate::reddit::config::MentionStance;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(stance: &MentionStance, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(stance.as_str())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<MentionStance, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(MentionStance::from_str(&s))
+    }
+}
+
 impl Default for RedditSearchParams {
     fn default() -> Self {
         Self {
             product_name: None,
-            mention_stance: "OPTIONAL".to_string(),
+            mention_stance: MentionStance::Optional,
             trigger_topics: vec![],
             query_keywords: vec![],
             seed_subreddits: vec![],
@@ -45,7 +74,7 @@ pub fn reddit_search_params_from_config(
 ) -> RedditSearchParams {
     RedditSearchParams {
         product_name: config.product_name.clone(),
-        mention_stance: config.reddit.mention_stance.as_str().to_string(),
+        mention_stance: config.reddit.mention_stance,
         trigger_topics: config.reddit.trigger_topics.clone(),
         query_keywords: config.reddit.query_keywords.clone(),
         seed_subreddits: config.reddit.seed_subreddits.clone(),
@@ -65,102 +94,6 @@ pub(crate) fn extract_user_context_from_description(task: &Task) -> Option<Strin
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-}
-
-// ─── Config parsers (MD helpers kept for migrator / unit tests) ───────────────
-
-/// Extract lines from the "## Trigger Topics" section of a reddit_config.md.
-/// Flexible parsing: accepts "## Trigger Topics", "## Triggers", or "## Topics"
-pub(crate) fn extract_trigger_topics(config: &str, max: usize) -> Vec<String> {
-    let mut in_section = false;
-    let mut topics: Vec<String> = Vec::new();
-    for line in config.lines() {
-        let trimmed = line.trim();
-        // Flexible matching for trigger topics section
-        let is_trigger_header = trimmed.starts_with("## Trigger Topics")
-            || trimmed.starts_with("## Triggers")
-            || trimmed.starts_with("## Topics");
-        if is_trigger_header {
-            in_section = true;
-            continue;
-        }
-        if in_section {
-            if trimmed.starts_with("##") {
-                break;
-            }
-            if let Some(topic) = trimmed.strip_prefix("- ") {
-                let topic = topic.split('(').next().unwrap_or(topic).trim().to_string();
-                if !topic.is_empty() {
-                    topics.push(topic);
-                    if topics.len() >= max {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    topics
-}
-
-/// Extract subreddit names from the "## Seed Subreddits" or "## Target Subreddits" section.
-pub(crate) fn extract_seed_subreddits(config: &str) -> Vec<String> {
-    let mut in_section = false;
-    let mut subs: Vec<String> = Vec::new();
-    for line in config.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("## Seed Subreddits") || trimmed.starts_with("## Target Subreddits")
-        {
-            in_section = true;
-            continue;
-        }
-        if in_section {
-            if trimmed.starts_with("##") {
-                break;
-            }
-            if let Some(name) = trimmed.strip_prefix("- ") {
-                let name = name.trim().trim_start_matches("r/");
-                let name = name.split(" — ").next().unwrap_or(name);
-                let name = name.split(" - ").next().unwrap_or(name);
-                let name = name.trim().to_lowercase();
-                if !name.is_empty() {
-                    subs.push(name);
-                }
-            }
-        }
-    }
-    subs
-}
-
-/// Extract compact search queries from the "## Query Keywords" section of reddit_config.md.
-/// Thin shim over [`crate::reddit::config::extract_query_keywords`] so exec
-/// call sites and `reddit_test` keep working without duplication.
-pub(crate) fn extract_query_keywords(config: &str) -> Vec<String> {
-    crate::reddit::config::extract_query_keywords(config)
-}
-
-/// Extract subreddit names from the "## Excluded Subreddits" section of reddit_config.md.
-pub(crate) fn extract_excluded_subreddits(config: &str) -> std::collections::HashSet<String> {
-    let mut in_section = false;
-    let mut excluded: std::collections::HashSet<String> = Default::default();
-    for line in config.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("## Excluded Subreddits") {
-            in_section = true;
-            continue;
-        }
-        if in_section {
-            if trimmed.starts_with("##") {
-                break;
-            }
-            if let Some(name) = trimmed.strip_prefix("- ") {
-                let name = name.trim().to_lowercase();
-                if !name.is_empty() {
-                    excluded.insert(name);
-                }
-            }
-        }
-    }
-    excluded
 }
 
 // ─── Deterministic Config Parse ───────────────────────────────────────────────
@@ -260,18 +193,4 @@ pub(crate) fn extract_post_details_from_task(task: &Task) -> Option<(String, Str
     } else {
         Some((post_id, reply_text))
     }
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/// Strip markdown code fences and extract the first JSON array from agent output.
-#[allow(dead_code)]
-pub(crate) fn extract_json_array(output: &str) -> String {
-    let trimmed = output.trim();
-    if let Some(start) = trimmed.find('[') {
-        if let Some(end) = trimmed.rfind(']') {
-            return trimmed[start..=end].to_string();
-        }
-    }
-    trimmed.to_string()
 }
