@@ -72,6 +72,12 @@ pub struct SearchKeywords {
 ///
 /// Includes `query_keywords` for future search assembly (#293). Does not
 /// depend on `engine::exec`.
+///
+/// **Subreddit wire invariant:** `seed_subreddits` and `excluded_subreddits`
+/// are bare lowercase names without an `r/` prefix (e.g. `"seo"`, not
+/// `"r/SEO"`). Matches MD runtime normalization in `reddit/config.rs`
+/// (`trim_start_matches("r/")` + `to_lowercase`). Load and save both
+/// normalize so dual shapes never re-enter the SOT.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectRedditConfig {
     #[serde(default)]
@@ -99,24 +105,17 @@ impl Default for ProjectRedditConfig {
     }
 }
 
-/// Reddit search-related fields for consumers that do not need full config.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RedditSearchFields {
-    pub mention_stance: MentionStance,
-    pub seed_subreddits: Vec<String>,
-    pub excluded_subreddits: Vec<String>,
-    pub trigger_topics: Vec<String>,
-    pub query_keywords: Vec<String>,
-}
-
 // ─── Load / save ─────────────────────────────────────────────────────────────
 
 /// Load and validate `project.yaml` from `path`.
 ///
 /// - Missing file → [`Error::ConfigMissing`]
-/// - Unreadable → IO / mapped with path
+/// - Unreadable → [`Error::Other`] with path context
 /// - Invalid YAML / type mismatch / missing `schema_version` → [`Error::Validation`]
 /// - `schema_version` ≠ [`SUPPORTED_SCHEMA_VERSION`] → hard [`Error::Validation`]
+///
+/// Subreddit lists are normalized to bare lowercase (no `r/` prefix) after
+/// deserialize — see [`ProjectRedditConfig`].
 pub fn load_project_config(path: &Path) -> Result<ProjectConfig> {
     if !path.exists() {
         return Err(Error::ConfigMissing(path.display().to_string()));
@@ -129,7 +128,7 @@ pub fn load_project_config(path: &Path) -> Result<ProjectConfig> {
         ))
     })?;
 
-    let config: ProjectConfig = serde_yaml::from_str(&raw).map_err(|e| {
+    let mut config: ProjectConfig = serde_yaml::from_str(&raw).map_err(|e| {
         Error::Validation(format!(
             "invalid project config {}: {e}",
             path.display()
@@ -137,13 +136,20 @@ pub fn load_project_config(path: &Path) -> Result<ProjectConfig> {
     })?;
 
     validate_schema_version(config.schema_version)?;
+    config.normalize_subreddits();
 
     Ok(config)
 }
 
 /// Serialize and write `project.yaml`, creating parent directories if needed.
+///
+/// Subreddit lists are normalized to bare lowercase before write so the
+/// on-disk form matches the load invariant.
 pub fn save_project_config(path: &Path, config: &ProjectConfig) -> Result<()> {
     validate_schema_version(config.schema_version)?;
+
+    let mut config = config.clone();
+    config.normalize_subreddits();
 
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -156,7 +162,7 @@ pub fn save_project_config(path: &Path, config: &ProjectConfig) -> Result<()> {
         }
     }
 
-    let raw = serde_yaml::to_string(config).map_err(|e| {
+    let raw = serde_yaml::to_string(&config).map_err(|e| {
         Error::Validation(format!("failed to serialize project config: {e}"))
     })?;
 
@@ -179,9 +185,34 @@ fn validate_schema_version(version: u32) -> Result<()> {
     Ok(())
 }
 
+/// Canonical subreddit form: bare lowercase, no `r/` prefix.
+/// Matches MD runtime in `reddit/config.rs` (`extract_subreddits`); lowercases
+/// first so `R/` is handled the same as `r/`.
+fn normalize_subreddit_name(name: &str) -> String {
+    name.trim().to_lowercase().trim_start_matches("r/").to_string()
+}
+
 // ─── Conversions ─────────────────────────────────────────────────────────────
 
 impl ProjectConfig {
+    /// Normalize seed/excluded subreddit lists in place.
+    fn normalize_subreddits(&mut self) {
+        self.reddit.seed_subreddits = self
+            .reddit
+            .seed_subreddits
+            .iter()
+            .map(|s| normalize_subreddit_name(s))
+            .filter(|s| !s.is_empty())
+            .collect();
+        self.reddit.excluded_subreddits = self
+            .reddit
+            .excluded_subreddits
+            .iter()
+            .map(|s| normalize_subreddit_name(s))
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+
     /// Lossless map of keyword lists + clusters into [`ProjectStrategy`].
     pub fn to_strategy(&self) -> ProjectStrategy {
         ProjectStrategy::from(self)
@@ -194,20 +225,10 @@ impl ProjectConfig {
         Self {
             schema_version: SUPPORTED_SCHEMA_VERSION,
             product_name: None,
-            search_keywords: SearchKeywords {
-                primary: strategy.primary_keywords.clone(),
-                problem: strategy.problem_keywords.clone(),
-                audience: strategy.audience_keywords.clone(),
-                do_not_expand: strategy.do_not_expand.clone(),
-            },
+            search_keywords: SearchKeywords::from(strategy),
             clusters: strategy.clusters.clone(),
             reddit: ProjectRedditConfig::default(),
         }
-    }
-
-    /// Reddit fields for search/opportunity flows (#293).
-    pub fn to_reddit_search_fields(&self) -> RedditSearchFields {
-        self.reddit.to_reddit_search_fields()
     }
 }
 
@@ -236,18 +257,6 @@ impl From<&ProjectStrategy> for SearchKeywords {
             problem: s.problem_keywords.clone(),
             audience: s.audience_keywords.clone(),
             do_not_expand: s.do_not_expand.clone(),
-        }
-    }
-}
-
-impl ProjectRedditConfig {
-    pub fn to_reddit_search_fields(&self) -> RedditSearchFields {
-        RedditSearchFields {
-            mention_stance: self.mention_stance,
-            seed_subreddits: self.seed_subreddits.clone(),
-            excluded_subreddits: self.excluded_subreddits.clone(),
-            trigger_topics: self.trigger_topics.clone(),
-            query_keywords: self.query_keywords.clone(),
         }
     }
 }
@@ -303,8 +312,9 @@ mod tests {
             ],
             reddit: ProjectRedditConfig {
                 mention_stance: MentionStance::Required,
-                seed_subreddits: vec!["r/SEO".into()],
-                excluded_subreddits: vec!["r/spam".into()],
+                // Canonical wire form: bare lowercase, no r/ prefix
+                seed_subreddits: vec!["seo".into()],
+                excluded_subreddits: vec!["spam".into()],
                 trigger_topics: vec!["seo tools".into()],
                 query_keywords: vec!["pageseeds".into()],
             },
@@ -493,10 +503,65 @@ reddit:
         let cfg: ProjectConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(cfg.reddit.query_keywords.is_empty());
         assert_eq!(cfg.reddit.mention_stance, MentionStance::Optional);
+    }
 
-        let fields = cfg.to_reddit_search_fields();
-        assert!(fields.query_keywords.is_empty());
-        assert_eq!(fields.mention_stance, MentionStance::Optional);
+    #[test]
+    fn load_normalizes_subreddit_wire_form() {
+        let dir = temp_dir("sub_norm");
+        let path = project_config_path(&dir);
+        std::fs::write(
+            &path,
+            r#"
+schema_version: 1
+reddit:
+  seed_subreddits:
+    - r/SEO
+    - R/Marketing
+    - " options "
+  excluded_subreddits:
+    - r/spam
+    - WALLSTREETBETS
+"#,
+        )
+        .unwrap();
+
+        let loaded = load_project_config(&path).unwrap();
+        assert_eq!(
+            loaded.reddit.seed_subreddits,
+            vec!["seo", "marketing", "options"]
+        );
+        assert_eq!(
+            loaded.reddit.excluded_subreddits,
+            vec!["spam", "wallstreetbets"]
+        );
+
+        // Save writes normalized form
+        save_project_config(&path, &loaded).unwrap();
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(!on_disk.contains("r/SEO"));
+        assert!(!on_disk.contains("R/Marketing"));
+        assert!(on_disk.contains("- seo"));
+        assert!(on_disk.contains("- marketing"));
+        assert!(on_disk.contains("- spam"));
+        assert!(on_disk.contains("- wallstreetbets"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_normalizes_prefixed_subreddits() {
+        let dir = temp_dir("save_norm");
+        let path = project_config_path(&dir);
+        let mut cfg = ProjectConfig::default();
+        cfg.reddit.seed_subreddits = vec!["r/SEO".into()];
+        cfg.reddit.excluded_subreddits = vec!["r/Spam".into()];
+
+        save_project_config(&path, &cfg).unwrap();
+        let loaded = load_project_config(&path).unwrap();
+        assert_eq!(loaded.reddit.seed_subreddits, vec!["seo"]);
+        assert_eq!(loaded.reddit.excluded_subreddits, vec!["spam"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
