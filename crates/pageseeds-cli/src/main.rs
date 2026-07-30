@@ -535,8 +535,8 @@ fn write_context(
     if project_id.is_empty() {
         exit("--project-id required");
     }
-    let research_task_id =
-        flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id (research) required"));
+    // -I optional when -K is project.yaml Primary/problem (intentional strategy write).
+    let research_task_id = flag(args, "--task-id", "-I");
     let keyword =
         flag(args, "--keyword", "-K").unwrap_or_else(|| exit("--keyword required"));
 
@@ -545,7 +545,7 @@ fn write_context(
         &conn,
         project_id,
         std::path::Path::new(project_path),
-        &research_task_id,
+        research_task_id.as_deref(),
         &keyword,
     )?;
     serde_json::to_value(package).map_err(|e| e.to_string())
@@ -1719,8 +1719,8 @@ const TOOLS: &[ToolHelp] = &[
     },
     ToolHelp {
         name: "write-context",
-        purpose: "Path B write package (brief/path/skill; no LLM)",
-        example: "write-context -i <id> -p <path> -I <research-task-id> -K <keyword>",
+        purpose: "Path B write package (brief/path/skill; no LLM). -I optional when -K is project.yaml Primary/problem",
+        example: "write-context -i <id> -p <path> -K \"per-leg P&L options\"  |  write-context -I <research-id> -K <kw>",
         section: "Path B write",
     },
     ToolHelp {

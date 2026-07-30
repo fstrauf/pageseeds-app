@@ -95,14 +95,10 @@ pub struct ContentBriefContext {
     pub strategy: ProjectStrategy,
 }
 
-/// Assemble the project-side context needed to build content briefs at task
-/// creation time: research themes/territory from the research task's
-/// artifacts, plus the project's articles and valid internal-link targets
-/// from SQLite. Every piece degrades gracefully to empty when unavailable.
-pub(crate) fn load_content_brief_context(
+/// Project articles + link targets + strategy (no research-task themes).
+pub(crate) fn load_content_brief_context_project_only(
     conn: &rusqlite::Connection,
     project_id: &str,
-    research_task: &Task,
 ) -> ContentBriefContext {
     let articles = crate::engine::task_store::list_articles(conn, project_id).unwrap_or_default();
     // Valid targets = project slugs minus redirected slugs (needs the project
@@ -118,15 +114,31 @@ pub(crate) fn load_content_brief_context(
         .as_ref()
         .map(|p| crate::strategy::load_project_strategy_from_project_path(&p.path))
         .unwrap_or_default();
-    let (open_territories, saturated_themes) = extract_territory_summary(research_task);
     ContentBriefContext {
-        themes: extract_research_themes(research_task),
-        open_territories,
-        saturated_themes,
+        themes: Vec::new(),
+        open_territories: Vec::new(),
+        saturated_themes: Vec::new(),
         articles,
         valid_link_targets,
         strategy,
     }
+}
+
+/// Assemble the project-side context needed to build content briefs at task
+/// creation time: research themes/territory from the research task's
+/// artifacts, plus the project's articles and valid internal-link targets
+/// from SQLite. Every piece degrades gracefully to empty when unavailable.
+pub(crate) fn load_content_brief_context(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    research_task: &Task,
+) -> ContentBriefContext {
+    let mut ctx = load_content_brief_context_project_only(conn, project_id);
+    let (open_territories, saturated_themes) = extract_territory_summary(research_task);
+    ctx.themes = extract_research_themes(research_task);
+    ctx.open_territories = open_territories;
+    ctx.saturated_themes = saturated_themes;
+    ctx
 }
 
 /// Extract article keyword metadata (intent, recommended title, selection

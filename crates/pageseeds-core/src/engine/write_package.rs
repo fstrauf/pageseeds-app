@@ -17,7 +17,8 @@ use crate::content::validate_article::{
     DEFAULT_MIN_WORD_COUNT,
 };
 use crate::engine::content_brief::{
-    build_content_brief, extract_article_keyword_meta, load_content_brief_context, ContentBrief,
+    build_content_brief, extract_article_keyword_meta, load_content_brief_context,
+    load_content_brief_context_project_only, ContentBrief,
 };
 use crate::engine::keyword_selection::{
     extract_keyword_metrics, extract_selectable_keywords, normalize_keyword,
@@ -33,11 +34,25 @@ pub const CONTENT_WRITE_SKILL: &str = "content-write";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+/// How the keyword was authorized for Path B write (selection vs strategy).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteAuthSource {
+    /// Keyword was on the research task selectable list (Ahrefs / selection path).
+    ResearchSelection,
+    /// Keyword matched `project.yaml` Primary or problem list (intentional strategy write).
+    StrategyPrimaryOrProblem,
+}
+
 /// Deterministic package handed to the outer (session) agent for one keyword.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WritePackage {
     pub keyword: String,
-    pub research_task_id: String,
+    /// Research task id when package was built from a picker/selection; omitted for strategy-only writes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub research_task_id: Option<String>,
+    /// Why this keyword was allowed without inventing demand.
+    pub auth_source: WriteAuthSource,
     pub project_id: String,
     pub content_brief: ContentBrief,
     /// Absolute path the agent should write the MDX file to.
@@ -114,54 +129,111 @@ const CATALOG_DRAFT_UNTIL_PUBLISH_REASON: &str =
 
 // ─── build_write_package ─────────────────────────────────────────────────────
 
-/// Build a deterministic write package for one keyword from a research task.
+/// True when `keyword` matches a Primary or problem phrase in strategy (normalized).
+pub fn keyword_in_strategy_primary_or_problem(
+    keyword: &str,
+    strategy: &crate::strategy::ProjectStrategy,
+) -> bool {
+    let n = normalize_keyword(keyword);
+    if n.is_empty() {
+        return false;
+    }
+    strategy
+        .primary_keywords
+        .iter()
+        .chain(strategy.problem_keywords.iter())
+        .any(|k| normalize_keyword(k) == n)
+}
+
+/// Build a deterministic write package for one keyword.
 ///
-/// Validates the keyword against the research selection list using the same
-/// normalizer / extractors as [`crate::engine::keyword_selection`]. No LLM.
+/// Authorization (either is enough):
+/// 1. **Research selection** — `-I` research task has the keyword on its selectable list
+///    (classic Path B after `select-keywords`).
+/// 2. **Strategy Primary / problem** — keyword ∈ `project.yaml` `search_keywords.primary`
+///    or `problem`, and is not hard-blocked by `do_not_expand` / LEGACY. Allows intentional
+///    product-led Primary writes when Ahrefs returns empty/covered expansions.
+///
+/// `-I` is optional when (2) applies. No LLM.
 pub fn build_write_package(
     conn: &Connection,
     project_id: &str,
     project_path: &Path,
-    research_task_id: &str,
+    research_task_id: Option<&str>,
     keyword: &str,
 ) -> Result<WritePackage, String> {
     let keyword = keyword.trim();
     if keyword.is_empty() {
         return Err("Keyword is required".to_string());
     }
-
-    let research_task = crate::engine::task_store::get_task(conn, research_task_id)
-        .map_err(|e| e.to_string())?;
-
-    if research_task.project_id != project_id {
-        return Err("Research task does not belong to this project".to_string());
-    }
-
-    // Same selection validation as build_content_tasks_from_keywords.
-    let allowed_keywords = extract_selectable_keywords(&research_task);
-    if allowed_keywords.is_empty() {
-        return Err(
-            "No selectable keywords found on the research task. Re-run keyword research first."
-                .to_string(),
-        );
-    }
-    let allowed_set: std::collections::HashSet<String> = allowed_keywords
-        .iter()
-        .map(|k| normalize_keyword(k))
-        .collect();
     let normalized = normalize_keyword(keyword);
-    if !allowed_set.contains(&normalized) {
+
+    let strategy = crate::strategy::load_project_strategy_from_project_path(
+        project_path.to_str().unwrap_or(""),
+    );
+
+    if crate::strategy::strategy_blocks_expansion(keyword, &strategy) {
         return Err(format!(
-            "Keyword is outside the workflow selection list: {keyword}"
+            "Keyword is blocked by strategy (do_not_expand / LEGACY): {keyword}"
         ));
     }
 
-    let brief_ctx = load_content_brief_context(conn, project_id, &research_task);
-    let metrics = extract_keyword_metrics(&research_task);
-    let article_meta = extract_article_keyword_meta(&research_task);
+    let research_task = if let Some(id) = research_task_id.map(str::trim).filter(|s| !s.is_empty()) {
+        let task = crate::engine::task_store::get_task(conn, id).map_err(|e| e.to_string())?;
+        if task.project_id != project_id {
+            return Err("Research task does not belong to this project".to_string());
+        }
+        Some(task)
+    } else {
+        None
+    };
+
+    let in_selection = research_task.as_ref().is_some_and(|task| {
+        extract_selectable_keywords(task)
+            .iter()
+            .any(|k| normalize_keyword(k) == normalized)
+    });
+    let in_strategy = keyword_in_strategy_primary_or_problem(keyword, &strategy);
+
+    let auth_source = if in_selection {
+        WriteAuthSource::ResearchSelection
+    } else if in_strategy {
+        WriteAuthSource::StrategyPrimaryOrProblem
+    } else if research_task.is_some() {
+        return Err(format!(
+            "Keyword is outside the workflow selection list and not in project.yaml Primary/problem: {keyword}"
+        ));
+    } else {
+        return Err(format!(
+            "Keyword is not in project.yaml Primary/problem (and no research -I selection). \
+             Pass -I <research-task-id> for Ahrefs picks, or use a Primary/problem keyword: {keyword}"
+        ));
+    };
+
+    let brief_ctx = match research_task.as_ref() {
+        Some(task) => load_content_brief_context(conn, project_id, task),
+        None => load_content_brief_context_project_only(conn, project_id),
+    };
+
+    let metrics = research_task
+        .as_ref()
+        .map(extract_keyword_metrics)
+        .unwrap_or_default();
+    let article_meta = research_task
+        .as_ref()
+        .map(extract_article_keyword_meta)
+        .unwrap_or_default();
     let metric = metrics.get(&normalized);
     let am = article_meta.get(&normalized);
-    let content_brief = build_content_brief(keyword, metric, None, am, &brief_ctx);
+    let mut content_brief = build_content_brief(keyword, metric, None, am, &brief_ctx);
+    if auth_source == WriteAuthSource::StrategyPrimaryOrProblem
+        && content_brief.selection_reason.is_none()
+    {
+        content_brief.selection_reason = Some(
+            "Intentional strategy write: keyword in project.yaml Primary or problem list"
+                .to_string(),
+        );
+    }
 
     let content_dir = resolve_content_dir_for_package(conn, project_id, project_path)?;
     let style = crate::content::naming::detect_numbered_mdx_style(&content_dir);
@@ -185,7 +257,8 @@ pub fn build_write_package(
 
     Ok(WritePackage {
         keyword: keyword.to_string(),
-        research_task_id: research_task_id.to_string(),
+        research_task_id: research_task.as_ref().map(|t| t.id.clone()),
+        auth_source,
         project_id: project_id.to_string(),
         content_brief,
         target_file,
@@ -1029,14 +1102,15 @@ mod tests {
             &conn,
             "proj1",
             tmp.path(),
-            &research_id,
+            Some(&research_id),
             "seo tools",
         )
         .expect("package should build without LLM");
 
         assert_eq!(pkg.keyword, "seo tools");
         assert_eq!(pkg.project_id, "proj1");
-        assert_eq!(pkg.research_task_id, research_id);
+        assert_eq!(pkg.research_task_id.as_deref(), Some(research_id.as_str()));
+        assert_eq!(pkg.auth_source, WriteAuthSource::ResearchSelection);
         assert_eq!(pkg.content_brief.keyword, "seo tools");
         assert_eq!(pkg.content_brief.difficulty, Some(30));
         assert_eq!(pkg.min_words, 800);
@@ -1082,12 +1156,99 @@ mod tests {
             &conn,
             "proj1",
             tmp.path(),
-            &research_id,
+            Some(&research_id),
             "not in list",
         )
         .unwrap_err();
         assert!(
-            err.contains("outside the workflow selection list"),
+            err.contains("outside the workflow selection list")
+                || err.contains("not in project.yaml"),
+            "err={err}"
+        );
+    }
+
+    fn write_strategy_yaml(project_path: &Path, primary: &[&str], problem: &[&str]) {
+        let prim: Vec<String> = primary.iter().map(|s| format!("  - {s}")).collect();
+        let prob: Vec<String> = problem.iter().map(|s| format!("  - {s}")).collect();
+        let yaml = format!(
+            "schema_version: 1\nproduct_name: Test\nsearch_keywords:\n  primary:\n{}\n  problem:\n{}\n  audience: []\n  do_not_expand:\n  - beginner options junk\nclusters: []\n",
+            prim.join("\n"),
+            prob.join("\n"),
+        );
+        fs::write(
+            project_path
+                .join(".github")
+                .join("automation")
+                .join("project.yaml"),
+            yaml,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn build_package_allows_strategy_primary_outside_selection() {
+        let tmp = TempProjectDir::new();
+        write_strategy_yaml(tmp.path(), &["per-leg P&L options"], &[]);
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+        let research_id = insert_research_task(&conn);
+
+        let pkg = build_write_package(
+            &conn,
+            "proj1",
+            tmp.path(),
+            Some(&research_id),
+            "per-leg P&L options",
+        )
+        .expect("Primary keyword should authorize without Ahrefs selection membership");
+
+        assert_eq!(pkg.auth_source, WriteAuthSource::StrategyPrimaryOrProblem);
+        assert_eq!(pkg.keyword, "per-leg P&L options");
+        assert_eq!(pkg.research_task_id.as_deref(), Some(research_id.as_str()));
+        assert!(
+            pkg.content_brief
+                .selection_reason
+                .as_ref()
+                .is_some_and(|s| s.contains("strategy")),
+            "brief should note strategy write"
+        );
+    }
+
+    #[test]
+    fn build_package_strategy_primary_without_research_task() {
+        let tmp = TempProjectDir::new();
+        write_strategy_yaml(tmp.path(), &["multi-leg options tracking"], &[]);
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+
+        let pkg = build_write_package(
+            &conn,
+            "proj1",
+            tmp.path(),
+            None,
+            "multi-leg options tracking",
+        )
+        .expect("strategy-only -K should work without -I");
+
+        assert_eq!(pkg.auth_source, WriteAuthSource::StrategyPrimaryOrProblem);
+        assert!(pkg.research_task_id.is_none());
+    }
+
+    #[test]
+    fn build_package_rejects_strategy_blocked_even_if_primary_shaped() {
+        let tmp = TempProjectDir::new();
+        // do_not_expand includes "beginner options junk"
+        write_strategy_yaml(tmp.path(), &["beginner options junk"], &[]);
+        let conn = in_memory_db(tmp.path().to_str().unwrap());
+
+        let err = build_write_package(
+            &conn,
+            "proj1",
+            tmp.path(),
+            None,
+            "beginner options junk",
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("blocked by strategy") || err.contains("do_not_expand"),
             "err={err}"
         );
     }
@@ -1111,7 +1272,7 @@ mod tests {
             &conn,
             "proj1",
             tmp.path(),
-            &research_id,
+            Some(&research_id),
             "seo tools",
         )
         .unwrap();
