@@ -238,7 +238,10 @@ and mark that platform as failed.
 1. Google Cloud project → enable **YouTube Data API v3**.
 2. Create **OAuth client** type **Desktop / installed app**.
 3. Mint a refresh token once (OAuth playground or a small installed-app consent flow)
-   with scope `https://www.googleapis.com/auth/youtube.upload`.
+   with scopes for **upload + channel preflight**:
+   - `https://www.googleapis.com/auth/youtube.upload` **and**
+   - `https://www.googleapis.com/auth/youtube.readonly`
+   - **or** the single full scope `https://www.googleapis.com/auth/youtube`
 4. Store credentials:
 
 ```bash
@@ -246,7 +249,22 @@ and mark that platform as failed.
 YOUTUBE_CLIENT_ID=....apps.googleusercontent.com
 YOUTUBE_CLIENT_SECRET=...
 YOUTUBE_REFRESH_TOKEN=...
+# optional multi-brand guard (title or @handle; see table below)
+# YOUTUBE_CHANNEL=My Brand Channel
 ```
+
+**Multi-brand:** each brand needs its **own** refresh token minted while signed into
+**that** channel. Copying the default token under a namespaced key is wrong (publish
+warns when `{PREFIX}YOUTUBE_REFRESH_TOKEN` equals `YOUTUBE_REFRESH_TOKEN`). Real
+(non-dry-run) publish always calls `channels.list?mine=true` after token refresh and
+logs the channel to stderr; if `YOUTUBE_CHANNEL` / `{PROJECT}_YOUTUBE_CHANNEL` is set
+and neither title nor customUrl matches, publish hard-fails (fix the token or the
+expected channel — no override flag).
+
+| project_id | Refresh token key | Optional expected channel | Mint while signed into |
+|------------|-------------------|---------------------------|------------------------|
+| (default) | `YOUTUBE_REFRESH_TOKEN` | `YOUTUBE_CHANNEL` | default brand channel |
+| e.g. `coffee` | `COFFEE_YOUTUBE_REFRESH_TOKEN` | `COFFEE_YOUTUBE_CHANNEL` | that project’s channel |
 
 Uploads use **`privacyStatus=private`** until the OAuth app is verified by Google
 (unverified apps cannot set public without quota/app review friction). Change privacy

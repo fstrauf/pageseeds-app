@@ -9,12 +9,15 @@ from pathlib import Path
 
 from publish_common import (
     PublishError,
+    _http_json_get,
     _http_json_post,
     _http_put,
+    channel_identity_matches,
     find_repo_root,
     load_clip,
     load_secrets,
     merge_published,
+    normalize_project_id,
     tags_from_hashtags,
     utc_now_iso,
 )
@@ -24,6 +27,9 @@ UPLOAD_INIT_URL = (
     "https://www.googleapis.com/upload/youtube/v3/videos"
     "?uploadType=resumable&part=snippet,status"
 )
+CHANNELS_LIST_URL = (
+    "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true"
+)
 YOUTUBE_KEYS = (
     "YOUTUBE_CLIENT_ID",
     "YOUTUBE_CLIENT_SECRET",
@@ -32,6 +38,14 @@ YOUTUBE_KEYS = (
 YOUTUBE_CHUNK_SIZE = 8 * 1024 * 1024
 DEFAULT_CATEGORY_ID = "22"  # People & Blogs
 PRIVACY = "private"
+
+# Scopes needed for upload + channel preflight (channels.list mine=true).
+YOUTUBE_SCOPE_HINT = (
+    "re-mint the refresh token with both "
+    "https://www.googleapis.com/auth/youtube.upload and "
+    "https://www.googleapis.com/auth/youtube.readonly "
+    "(or the single full scope https://www.googleapis.com/auth/youtube)"
+)
 
 
 def build_youtube_metadata(packaging: dict) -> dict:
@@ -83,6 +97,92 @@ def refresh_youtube_token(creds: dict[str, str]) -> str:
         detail = json.dumps(data)[:200]
         raise PublishError(f"publish: YouTube token refresh failed ({status}): {detail}")
     return data["access_token"]
+
+
+def format_channel_log_line(title: str, custom_url: str) -> str:
+    """stderr identity line: title only, or title (@handle) with a single @."""
+    handle = (custom_url or "").strip().lstrip("@").strip()
+    if handle:
+        return f"publish: youtube channel = {title} (@{handle})"
+    return f"publish: youtube channel = {title}"
+
+
+def list_youtube_channel(access_token: str) -> tuple[str, str]:
+    """GET channels?part=snippet&mine=true. Returns (title, customUrl).
+
+    Logs identity to stderr. Raises PublishError on empty items, HTTP 403 /
+    insufficient scope, or other non-success responses.
+    """
+    status, data = _http_json_get(
+        CHANNELS_LIST_URL,
+        {"Authorization": f"Bearer {access_token}"},
+    )
+    if status == 403 or (
+        isinstance(data, dict)
+        and status != 200
+        and _is_insufficient_scope_error(data)
+    ):
+        raise PublishError(
+            f"publish: YouTube channels.list failed ({status}) — insufficient scope; "
+            f"{YOUTUBE_SCOPE_HINT}"
+        )
+    if status != 200 or not isinstance(data, dict):
+        detail = data if isinstance(data, str) else json.dumps(data)[:300]
+        raise PublishError(f"publish: YouTube channels.list failed ({status}): {detail}")
+
+    items = data.get("items") or []
+    if not items:
+        raise PublishError(
+            "publish: YouTube channels.list returned no channels for this token "
+            "(empty items) — token may lack channel access or be for a brand account "
+            "without a linked channel"
+        )
+
+    snippet = items[0].get("snippet") or {}
+    title = (snippet.get("title") or "").strip()
+    custom_url = (snippet.get("customUrl") or "").strip()
+    if not title:
+        title = "(unknown)"
+    print(format_channel_log_line(title, custom_url), file=sys.stderr)
+    return title, custom_url
+
+
+def _is_insufficient_scope_error(data: dict) -> bool:
+    err = data.get("error")
+    if not isinstance(err, dict):
+        return False
+    if err.get("status") == "PERMISSION_DENIED":
+        return True
+    msg = (err.get("message") or "").lower()
+    if "insufficient" in msg and "scope" in msg:
+        return True
+    for e in err.get("errors") or []:
+        if not isinstance(e, dict):
+            continue
+        reason = (e.get("reason") or "").lower()
+        if reason in ("insufficientpermissions", "accessnotconfigured", "forbidden"):
+            return True
+        if "scope" in (e.get("message") or "").lower():
+            return True
+    return False
+
+
+def assert_expected_youtube_channel(
+    creds: dict[str, str], title: str, custom_url: str
+) -> None:
+    """If YOUTUBE_CHANNEL is set (after namespaced overlay), require title or customUrl match."""
+    expected = (creds.get("YOUTUBE_CHANNEL") or "").strip()
+    if not expected:
+        return
+    if channel_identity_matches(expected, title, custom_url):
+        return
+    handle = (custom_url or "").strip().lstrip("@").strip()
+    actual = f"{title} (@{handle})" if handle else title
+    raise PublishError(
+        f"publish: YouTube channel mismatch — token is for {actual!r} "
+        f"but YOUTUBE_CHANNEL={expected!r}; fix the refresh token or remove/correct "
+        f"YOUTUBE_CHANNEL (no override flag)"
+    )
 
 
 def set_youtube_thumbnail(access_token: str, video_id: str, video_path: Path) -> str | None:
@@ -197,6 +297,7 @@ def publish_youtube(clip_path: Path, video_path: Path, dry_run: bool) -> dict:
             "metadata": metadata,
             "plan": [
                 "refresh_token",
+                "list_channel",
                 "resumable_init",
                 "upload_bytes",
                 "write_published_youtube_to_clip",
@@ -214,7 +315,7 @@ def publish_youtube(clip_path: Path, video_path: Path, dry_run: bool) -> dict:
         }
 
     repo_root = find_repo_root(clip_path) or find_repo_root(Path.cwd())
-    project_id = (clip.get("source") or {}).get("project_id")
+    project_id = normalize_project_id((clip.get("source") or {}).get("project_id"))
     creds = load_secrets(repo_root, project_id=project_id)
     missing = [k for k in YOUTUBE_KEYS if not creds.get(k)]
     if missing:
@@ -224,6 +325,8 @@ def publish_youtube(clip_path: Path, video_path: Path, dry_run: bool) -> dict:
         )
 
     token = refresh_youtube_token(creds)
+    title, custom_url = list_youtube_channel(token)
+    assert_expected_youtube_channel(creds, title, custom_url)
     result = youtube_resumable_upload(token, video_path, metadata)
     video_id = result.get("id")
     if not video_id:
