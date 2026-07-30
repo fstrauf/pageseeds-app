@@ -30,9 +30,10 @@ use crate::strategy::{ContentStrategySummary, StrategyLoadStatus};
 
 // Re-export refresh / re-annotate surface so callers can use `research_package::*` paths.
 pub use crate::engine::research_shortlist_refresh::{
-    ensure_research_shortlist_fresh, inject_strategy_shortlist_seeds,
+    ensure_research_shortlist_fresh, inject_gsc_uncovered_seeds, inject_strategy_shortlist_seeds,
     reannotate_shortlist_strategy, shortlist_refresh_reason, ShortlistRefreshResult,
-    MAX_STRATEGY_SHORTLIST_INJECTS, RESEARCH_SHORTLIST_MAX_AGE_DAYS,
+    MAX_GSC_UNCOVERED_INJECTS, MAX_STRATEGY_SHORTLIST_INJECTS, MIN_UNCOVERED_QUERY_IMPRESSIONS,
+    RESEARCH_SHORTLIST_MAX_AGE_DAYS,
 };
 
 // ─── Strategy package ────────────────────────────────────────────────────────
@@ -197,10 +198,12 @@ pub struct ResearchContextPackage {
 /// Ensure shortlist freshness then build the pure strategy package into one envelope.
 ///
 /// Side effects live in [`super::research_shortlist_refresh`]:
-/// [`ensure_research_shortlist_fresh`], [`reannotate_shortlist_strategy`], and
-/// [`inject_strategy_shortlist_seeds`] so `project.md` edits show up without
-/// waiting for the 7-day territory TTL (issue #258) and Primary/ACTIVE strategy
-/// bullets become pending research fuel even with 0 GSC impressions (issue #274).
+/// [`ensure_research_shortlist_fresh`], [`reannotate_shortlist_strategy`],
+/// [`inject_strategy_shortlist_seeds`], and [`inject_gsc_uncovered_seeds`] so
+/// `project.md` edits show up without waiting for the 7-day territory TTL
+/// (issue #258), Primary/ACTIVE strategy bullets become pending research fuel
+/// even with 0 GSC impressions (issue #274), and aggregated query-level GSC
+/// demand without article/strategy coverage seeds the shortlist (issue #304).
 /// CLI should call this and `serde_json::to_value` only — no package field
 /// composition in the binary.
 pub fn build_research_context(
@@ -214,6 +217,8 @@ pub fn build_research_context(
     // Always inject Primary/ACTIVE strategy seeds (runs even when territory is
     // skipped_fresh — must not be gated solely on empty/stale territory).
     let _ = inject_strategy_shortlist_seeds(conn, project_id);
+    // Always inject uncovered GSC query demand (issue #304).
+    let _ = inject_gsc_uncovered_seeds(conn, project_id);
     let strategy = build_research_strategy_package(conn, project_id)?;
     Ok(ResearchContextPackage {
         strategy,
