@@ -1,4 +1,7 @@
-use super::{extract_user_context_from_description, load_search_params_from_artifact};
+use super::{
+    extract_user_context_from_description, load_search_params_from_artifact,
+    load_search_params_from_project_config,
+};
 use crate::models::task::Task;
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -330,7 +333,7 @@ pub fn exec_reddit_enrich(
     log::info!("[reddit_enrich] {} posts to enrich", rows.len());
 
     let automation_dir = Path::new(project_path).join(".github").join("automation");
-    // Primary: project.md (consolidated). Fallback: legacy files.
+    // Prose context: project.md (consolidated). Fallback: legacy stitch.
     let project_context = std::fs::read_to_string(automation_dir.join("project.md"))
         .or_else(|_| {
             // Legacy fallback: stitch old files together
@@ -343,18 +346,16 @@ pub fn exec_reddit_enrich(
             Ok::<String, std::io::Error>(format!("{}\n\n{}\n\n{}", summary, brand, brief))
         })
         .unwrap_or_default();
-    let reddit_config_raw =
-        std::fs::read_to_string(automation_dir.join("reddit_config.md")).unwrap_or_default();
     let guardrails =
         std::fs::read_to_string(automation_dir.join("reddit").join("_reply_guardrails.md"))
             .unwrap_or_default();
 
-    if project_context.is_empty() && reddit_config_raw.is_empty() {
+    if project_context.is_empty() {
         log::warn!("[reddit_enrich] no project context — skipping");
         return;
     }
 
-    // Try to load structured params from the artifact (produced by reddit_config_parse_stage)
+    // Happy path: artifact from reddit_config_parse_stage; fallback: ProjectConfig/YAML
     let (product_name, mention_stance_str, user_context) =
         match load_search_params_from_artifact(task, project_path) {
             Some(params) => {
@@ -375,16 +376,32 @@ pub fn exec_reddit_enrich(
                 (name, stance, ctx)
             }
             None => {
-                // Fallback: deterministic parse from reddit_config.md
                 log::info!(
-                    "[reddit_enrich] no artifact found, falling back to deterministic parse"
+                    "[reddit_enrich] no artifact found, falling back to ProjectConfig"
                 );
-                let cfg = crate::reddit::config::parse_reddit_config(&reddit_config_raw);
-                let name = cfg
-                    .product_name
-                    .unwrap_or_else(|| "the product".to_string());
-                let stance = cfg.mention_stance.as_str().to_string();
-                (name, stance, extract_user_context_from_description(task))
+                match load_search_params_from_project_config(
+                    project_path,
+                    extract_user_context_from_description(task),
+                ) {
+                    Ok(params) => {
+                        let name = params
+                            .product_name
+                            .unwrap_or_else(|| "the product".to_string());
+                        let stance = params.mention_stance.to_uppercase();
+                        (name, stance, params.user_context)
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[reddit_enrich] ProjectConfig fallback failed: {} — using defaults",
+                            e
+                        );
+                        (
+                            "the product".to_string(),
+                            "OPTIONAL".to_string(),
+                            extract_user_context_from_description(task),
+                        )
+                    }
+                }
             }
         };
 
@@ -437,9 +454,10 @@ pub fn exec_reddit_enrich(
         _ => String::new(),
     };
 
+    // Product/stance come from YAML (artifact or ensure); do not re-stuff
+    // reddit_config.md structured fields into the prompt.
     let context = format!(
         "## PROJECT CONTEXT\n{project_context}\n\n\
-         ## REDDIT CONFIG\n{reddit_config_raw}\n\n\
          {user_focus_block}\
          ## REPLY GUARDRAILS\n{guardrails}\n\n\
          ## POSTS (title + body)\n\
@@ -449,7 +467,6 @@ pub fn exec_reddit_enrich(
          Mention stance: {mention_stance_str}\n\
          {stance_instruction}",
         project_context = project_context,
-        reddit_config_raw = reddit_config_raw,
         user_focus_block = user_focus_block,
         guardrails = guardrails,
         posts_block = posts_block,

@@ -1,17 +1,18 @@
 /// Reddit search and enrichment execution module.
 ///
 /// Covers:
-///   - exec_reddit_config_parse   (agentic: parse reddit_config.md → structured JSON)
+///   - exec_reddit_config_parse   (deterministic: ProjectConfig/YAML → structured JSON)
 ///   - exec_reddit_search         (deterministic API search + scoring)
 ///   - persist_reddit_opportunities (upsert enriched opportunities to SQLite)
 ///   - exec_reddit_enrich         (AI pass: fill why_relevant + draft reply)
-///   - extract_trigger_topics     (parse reddit_config.md)
+///   - extract_trigger_topics     (MD helpers for migrator / unit tests)
 ///   - extract_seed_subreddits
 ///   - extract_query_keywords
 ///   - extract_excluded_subreddits
 ///   - compute_scores
 ///   - extract_json_array
 use crate::models::task::Task;
+use std::path::Path;
 
 mod config;
 mod enrich;
@@ -25,6 +26,7 @@ pub(crate) use search::*;
 
 // Public re-exports for integration tests
 pub use config::exec_reddit_config_parse;
+pub use config::reddit_search_params_from_config;
 pub use enrich::{PersistOutcome, persist_reddit_opportunities};
 pub use reply::exec_reddit_post_reply;
 
@@ -67,28 +69,16 @@ pub(crate) fn load_search_params_from_artifact(
     }
 }
 
-/// Parse config directly as fallback when no artifact is available.
-pub(crate) fn parse_config_fallback(config: &str) -> RedditSearchParams {
-    let queries = {
-        let kw = extract_query_keywords(config);
-        if kw.is_empty() {
-            extract_trigger_topics(config, 10)
-        } else {
-            kw
-        }
-    };
-
-    let seed_subs = extract_seed_subreddits(config);
-    let excluded: Vec<String> = extract_excluded_subreddits(config).into_iter().collect();
-    let cfg = crate::reddit::config::parse_reddit_config(config);
-
-    RedditSearchParams {
-        product_name: cfg.product_name,
-        mention_stance: cfg.mention_stance.as_str().to_string(),
-        trigger_topics: extract_trigger_topics(config, 10),
-        query_keywords: queries,
-        seed_subreddits: seed_subs,
-        excluded_subreddits: excluded,
-        user_context: None,
-    }
+/// Load structured search params from `project.yaml` via ensure + mapper.
+///
+/// Used when the config-parse stage artifact is missing (backward compat).
+/// Does **not** re-parse live MD for structured knobs.
+pub(crate) fn load_search_params_from_project_config(
+    project_path: &str,
+    user_context: Option<String>,
+) -> Result<RedditSearchParams, String> {
+    let automation_dir = Path::new(project_path).join(".github").join("automation");
+    let (config, _) = crate::project_config::ensure_project_config(&automation_dir)
+        .map_err(|e| format!("project config unavailable: {e}"))?;
+    Ok(reddit_search_params_from_config(&config, user_context))
 }

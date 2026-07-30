@@ -211,38 +211,41 @@ mod tests {
         }
     }
 
+    /// YAML-first fixture: project.yaml + project.md prose + guardrails.
+    /// No reddit_config.md required for happy path (#293).
     fn setup_reddit_project(dir: &std::path::Path) {
         let automation = dir.join(".github").join("automation");
         let reddit_dir = automation.join("reddit");
         std::fs::create_dir_all(&reddit_dir).unwrap();
 
-        // Create reddit_config.md
         std::fs::write(
-            automation.join("reddit_config.md"),
-            r#"# Reddit Config: Test Product
-
-> Full project context: see `project.md` in this directory
-
-## Mention Stance
-**RECOMMENDED** - Include product name when it adds value naturally
-
-## Trigger Topics
-- Test automation
-- Developer tools
-- Productivity software
-
-## Target Subreddits
-- r/testing
-- r/developers
-
-## Query Keywords
-- "test automation"
-- "developer tools"
+            automation.join("project.yaml"),
+            r#"schema_version: 1
+product_name: Test Product
+search_keywords:
+  primary: []
+  problem: []
+  audience: []
+  do_not_expand: []
+clusters: []
+reddit:
+  mention_stance: recommended
+  seed_subreddits:
+    - testing
+    - developers
+  excluded_subreddits: []
+  trigger_topics:
+    - Test automation
+    - Developer tools
+    - Productivity software
+  query_keywords:
+    - test automation
+    - developer tools
 "#,
         )
         .unwrap();
 
-        // Create consolidated project.md (replaces project_summary.md + brandvoice.md)
+        // Prose for enrich/draft prompts
         std::fs::write(
             automation.join("project.md"),
             r#"# Test Product
@@ -308,40 +311,44 @@ Helpful, technical, and concise.
         std::fs::remove_dir_all(&temp_dir).ok();
     }
 
-    /// Test that config parsing extracts structured data from reddit_config.md
+    /// Deterministic config parse from project.yaml — no agent/rig (#293).
     #[test]
     fn reddit_config_parsing_extracts_search_params() {
-        use crate::engine::exec::reddit::RedditSearchParams;
-
         let temp_dir =
             std::env::temp_dir().join(format!("ps_reddit_test_{}", Utc::now().timestamp_millis()));
         setup_reddit_project(&temp_dir);
 
-        // Read the config file
-        let config_path = temp_dir
-            .join(".github")
-            .join("automation")
-            .join("reddit_config.md");
-        let config_content = std::fs::read_to_string(&config_path).unwrap();
+        let task = create_reddit_search_task("proj-yaml");
+        let result = crate::engine::exec::reddit::exec_reddit_config_parse(
+            &task,
+            &temp_dir.to_string_lossy(),
+            "unused-provider",
+        );
 
-        // Use the fallback parser to extract params
-        let params = crate::engine::exec::reddit::parse_config_fallback(&config_content);
+        assert!(
+            result.success,
+            "config parse should succeed without agent: {}",
+            result.message
+        );
+        let output = result.output.expect("should emit RedditSearchParams JSON");
+        let params: crate::engine::exec::reddit::RedditSearchParams =
+            serde_json::from_str(&output).expect("output must be RedditSearchParams");
 
-        // Verify extraction
         assert!(
             !params.query_keywords.is_empty(),
-            "Should extract query keywords"
+            "Should load query keywords from YAML"
         );
         assert!(
             !params.trigger_topics.is_empty(),
-            "Should extract trigger topics"
+            "Should load trigger topics from YAML"
         );
         assert!(
             !params.seed_subreddits.is_empty(),
-            "Should extract seed subreddits"
+            "Should load seed subreddits from YAML"
         );
 
-        // Check specific values
+        assert_eq!(params.product_name.as_deref(), Some("Test Product"));
+        assert_eq!(params.mention_stance, "RECOMMENDED");
         assert!(params
             .query_keywords
             .contains(&"test automation".to_string()));
@@ -349,7 +356,150 @@ Helpful, technical, and concise.
             .trigger_topics
             .contains(&"Test automation".to_string()));
         assert!(params.seed_subreddits.contains(&"testing".to_string()));
+        assert!(params.user_context.is_none());
 
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    /// user_context from task description is injected into params.
+    #[test]
+    fn reddit_config_parse_injects_user_context() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ps_reddit_uctx_{}",
+            Utc::now().timestamp_millis()
+        ));
+        setup_reddit_project(&temp_dir);
+
+        let mut task = create_reddit_search_task("proj-uctx");
+        task.description = Some(r#"{"user_context":"focus on CLI tools"}"#.to_string());
+
+        let result = crate::engine::exec::reddit::exec_reddit_config_parse(
+            &task,
+            &temp_dir.to_string_lossy(),
+            "_",
+        );
+        assert!(result.success, "{}", result.message);
+        let params: crate::engine::exec::reddit::RedditSearchParams =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(params.user_context.as_deref(), Some("focus on CLI tools"));
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    /// Empty keywords+topics fails clearly (operator must fill YAML).
+    #[test]
+    fn reddit_config_parse_fails_when_keywords_and_topics_empty() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ps_reddit_empty_{}",
+            Utc::now().timestamp_millis()
+        ));
+        let automation = temp_dir.join(".github").join("automation");
+        std::fs::create_dir_all(automation.join("reddit")).unwrap();
+        std::fs::write(
+            automation.join("project.yaml"),
+            r#"schema_version: 1
+product_name: EmptyKw
+reddit:
+  mention_stance: optional
+  seed_subreddits: []
+  excluded_subreddits: []
+  trigger_topics: []
+  query_keywords: []
+"#,
+        )
+        .unwrap();
+        std::fs::write(automation.join("project.md"), "# EmptyKw\n").unwrap();
+        std::fs::write(
+            automation.join("reddit").join("_reply_guardrails.md"),
+            "guard\n",
+        )
+        .unwrap();
+
+        let task = create_reddit_search_task("proj-empty");
+        let result = crate::engine::exec::reddit::exec_reddit_config_parse(
+            &task,
+            &temp_dir.to_string_lossy(),
+            "_",
+        );
+        assert!(!result.success);
+        assert!(
+            result.message.contains("query_keywords") || result.message.contains("trigger_topics"),
+            "message should mention empty keywords/topics: {}",
+            result.message
+        );
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    /// validate_project_stance REQUIRED with YAML only (no reddit_config.md).
+    #[test]
+    fn validate_project_stance_required_yaml_only() {
+        use crate::reddit::validation::validate_project_stance;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ps_reddit_stance_{}",
+            Utc::now().timestamp_millis()
+        ));
+        let automation = temp_dir.join(".github").join("automation");
+        std::fs::create_dir_all(&automation).unwrap();
+        std::fs::write(
+            automation.join("project.yaml"),
+            r#"schema_version: 1
+product_name: StanceProduct
+reddit:
+  mention_stance: required
+  seed_subreddits: []
+  excluded_subreddits: []
+  trigger_topics:
+    - something
+  query_keywords:
+    - something
+"#,
+        )
+        .unwrap();
+
+        let ok = validate_project_stance(
+            "This is a long enough reply. StanceProduct helps here. Third sentence ends.",
+            &automation,
+        );
+        assert!(ok.valid, "reply with product name should pass: {:?}", ok.error);
+
+        let bad = validate_project_stance(
+            "This is a long enough reply without the brand. Still three sentences here. Yes.",
+            &automation,
+        );
+        assert!(!bad.valid);
+        assert!(
+            bad.error
+                .as_deref()
+                .unwrap_or("")
+                .contains("StanceProduct"),
+            "error should name product: {:?}",
+            bad.error
+        );
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    /// YAML-only tree (no reddit_config.md) is not reported missing by draft gates.
+    #[test]
+    fn missing_config_files_allows_yaml_without_reddit_config_md() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ps_reddit_missing_{}",
+            Utc::now().timestamp_millis()
+        ));
+        setup_reddit_project(&temp_dir);
+        let automation = temp_dir.join(".github").join("automation");
+        assert!(
+            !automation.join("reddit_config.md").exists(),
+            "fixture must not require reddit_config.md"
+        );
+        let missing = crate::reddit::config::missing_config_files(&automation);
+        assert!(
+            missing.is_empty(),
+            "YAML + prose + guardrails should pass: {:?}",
+            missing
+        );
         std::fs::remove_dir_all(&temp_dir).ok();
     }
 

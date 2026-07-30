@@ -60,53 +60,56 @@ pub struct RedditProjectConfig {
 
 // ─── Required config files ────────────────────────────────────────────────────
 
-/// The config files required to run Reddit opportunity search.
-/// Uses consolidated project.md (primary) with fallback to legacy files.
+/// Representative paths for operator messaging. Runtime structured knobs come
+/// from `project.yaml` (ensure can migrate legacy MD). `reddit_config.md` is
+/// **not** required when YAML is present.
 #[allow(dead_code)]
 pub fn required_config_files(automation_dir: &Path) -> Vec<std::path::PathBuf> {
     vec![
-        automation_dir.join("project.md"), // consolidated
-        automation_dir.join("reddit_config.md"),
+        automation_dir.join("project.yaml"),
+        automation_dir.join("project.md"), // prose
         automation_dir.join("reddit").join("_reply_guardrails.md"),
     ]
 }
 
-/// Returns names of any missing required config files.
-/// If project.md is missing, checks for legacy files before reporting missing.
+/// Returns names of any missing required config files for Reddit workflows.
+///
+/// Requires:
+/// - Structured config: `project.yaml` **or** legacy sources ensure can migrate
+///   (`project.md` and/or `reddit_config.md`)
+/// - Project prose: `project.md` or legacy summary/brandvoice
+/// - Reply guardrails: `reddit/_reply_guardrails.md`
+///
+/// Does **not** require `reddit_config.md` when YAML (or other migratable
+/// structured sources) already exist.
 pub fn missing_config_files(automation_dir: &Path) -> Vec<String> {
     let mut missing = Vec::new();
 
-    // Check for consolidated project.md first
-    let project_md = automation_dir.join("project.md");
-    let has_project_md = project_md.exists();
+    let has_yaml = automation_dir.join("project.yaml").exists();
+    let has_legacy_structured = automation_dir.join("project.md").exists()
+        || automation_dir.join("reddit_config.md").exists();
+    if !has_yaml && !has_legacy_structured {
+        missing.push(
+            "project.yaml (or legacy project.md / reddit_config.md for migration)".to_string(),
+        );
+    }
 
-    // If no project.md, check for legacy files as fallback
-    if !has_project_md {
-        let legacy_files = [
+    // Prose for drafts/enrich
+    let project_md = automation_dir.join("project.md");
+    if !project_md.exists() {
+        let legacy_prose = [
             automation_dir.join("project_summary.md"),
             automation_dir.join("brandvoice.md"),
         ];
-        let has_legacy = legacy_files.iter().any(|p| p.exists());
-
-        if !has_legacy {
-            // Neither consolidated nor legacy files exist
+        let has_legacy_prose = legacy_prose.iter().any(|p| p.exists());
+        if !has_legacy_prose {
             missing.push("project.md (or legacy project_summary.md + brandvoice.md)".to_string());
         }
     }
 
-    // Check other required files
-    for path in [
-        automation_dir.join("reddit_config.md"),
-        automation_dir.join("reddit").join("_reply_guardrails.md"),
-    ] {
-        if !path.exists() {
-            missing.push(
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown")
-                    .to_string(),
-            );
-        }
+    let guardrails = automation_dir.join("reddit").join("_reply_guardrails.md");
+    if !guardrails.exists() {
+        missing.push("_reply_guardrails.md".to_string());
     }
 
     missing

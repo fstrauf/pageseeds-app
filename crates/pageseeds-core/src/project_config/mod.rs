@@ -2,8 +2,8 @@
 //!
 //! Load/save, conversions, deterministic MD→YAML migrator ([`migrate`]), and
 //! runtime ensure ([`ensure_project_config`]) which auto-migrates legacy MD on
-//! first need. Strategy loaders use ensure for YAML-only structured strategy;
-//! Reddit MD rewire is #293.
+//! first need. Strategy and Reddit pipelines use ensure for structured knobs
+//! (YAML SOT; legacy MD is migration source only).
 
 use std::path::{Path, PathBuf};
 

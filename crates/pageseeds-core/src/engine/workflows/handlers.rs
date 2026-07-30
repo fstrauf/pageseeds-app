@@ -606,7 +606,7 @@ impl WorkflowHandler for RedditHandler {
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
         match task_type(task) {
             "reddit_opportunity_search" => vec![
-                // Step 1 (agentic): Parse reddit_config.md and extract structured search parameters.
+                // Step 1 (deterministic): Load structured search params from ProjectConfig (YAML).
                 WorkflowStep::new("reddit_config_parse_stage", StepKind::RedditConfigParse),
                 // Step 2 (deterministic): API search using the structured parameters.
                 WorkflowStep::new("reddit_search_stage", StepKind::RedditSearch),

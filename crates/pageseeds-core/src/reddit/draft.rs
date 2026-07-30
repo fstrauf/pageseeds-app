@@ -5,8 +5,10 @@ use crate::reddit::config as reddit_cfg;
 
 /// Build the prompt and generate a draft reply for a Reddit opportunity.
 ///
-/// This function reads project context, Reddit config, guardrails, and skill files,
-/// builds the prompt, calls the agent, and returns the generated reply text.
+/// This function reads project prose, guardrails, and skill files, builds the
+/// prompt, calls the agent, and returns the generated reply text.
+/// Structured knobs (product/stance) come from the opportunity row or
+/// [`crate::project_config::ensure_project_config`] — not live MD parse.
 /// It does NOT write to the database — the caller is responsible for persisting.
 pub async fn generate_draft_reply(
     project_path: &str,
@@ -42,8 +44,6 @@ pub async fn generate_draft_reply(
         })
         .map_err(|e| format!("Failed to read project.md: {}", e))?;
 
-    let reddit_config_raw =
-        std::fs::read_to_string(automation_dir.join("reddit_config.md")).unwrap_or_default();
     let guardrails =
         std::fs::read_to_string(automation_dir.join("reddit").join("_reply_guardrails.md"))
             .unwrap_or_default();
@@ -53,7 +53,7 @@ pub async fn generate_draft_reply(
         .unwrap_or_default();
 
     // Read product_name and mention_stance from the opportunity row.
-    // Fall back to deterministic parsing only for pre-migration rows.
+    // Fall back to ProjectConfig (YAML via ensure) for pre-migration rows.
     let (product_name, mention_stance) = match (&opp.product_name, &opp.mention_stance) {
         (Some(name), Some(stance)) if !name.is_empty() => {
             log::info!(
@@ -64,13 +64,23 @@ pub async fn generate_draft_reply(
             (name.clone(), stance.clone())
         }
         _ => {
-            log::info!("[draft] DB values missing, falling back to deterministic parse");
-            let cfg = reddit_cfg::parse_reddit_config(&reddit_config_raw);
-            let name = cfg
-                .product_name
-                .unwrap_or_else(|| "the product".to_string());
-            let stance = cfg.mention_stance.as_str().to_string();
-            (name, stance)
+            log::info!("[draft] DB values missing, falling back to ProjectConfig");
+            match crate::project_config::ensure_project_config(&automation_dir) {
+                Ok((cfg, _)) => {
+                    let name = cfg
+                        .product_name
+                        .unwrap_or_else(|| "the product".to_string());
+                    let stance = cfg.reddit.mention_stance.as_str().to_string();
+                    (name, stance)
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[draft] ProjectConfig unavailable ({}); using defaults",
+                        e
+                    );
+                    ("the product".to_string(), "OPTIONAL".to_string())
+                }
+            }
         }
     };
 

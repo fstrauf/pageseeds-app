@@ -1,4 +1,7 @@
-use super::{load_search_params_from_artifact, parse_config_fallback};
+use super::{
+    extract_user_context_from_description, load_search_params_from_artifact,
+    load_search_params_from_project_config,
+};
 use crate::models::task::Task;
 use rusqlite::Connection;
 use std::collections::HashSet;
@@ -116,22 +119,25 @@ pub(crate) async fn exec_reddit_search(
         handled_ids.len()
     );
 
-    // Try to load structured search params from artifact (produced by reddit_config_parse_stage)
+    // Happy path: structured params artifact from reddit_config_parse_stage
     let params = load_search_params_from_artifact(task, project_path);
 
-    // Fallback: parse config directly if no artifact (backward compatibility)
+    // Fallback: ProjectConfig via ensure (not live MD parse)
     let params = match params {
         Some(p) => p,
         None => {
-            log::info!("[reddit_search] no structured params artifact found, falling back to direct config parse");
-            let config_path = format!("{}/.github/automation/reddit_config.md", project_path);
-            match std::fs::read_to_string(&config_path) {
-                Ok(config) => parse_config_fallback(&config),
+            log::info!(
+                "[reddit_search] no structured params artifact found, falling back to ProjectConfig"
+            );
+            match load_search_params_from_project_config(
+                project_path,
+                extract_user_context_from_description(task),
+            ) {
+                Ok(p) => p,
                 Err(e) => {
                     return crate::engine::workflows::StepResult::fail(format!(
-                            "reddit_config.md not found at {} — create it first: {}",
-                            config_path, e
-                        ))
+                        "project config unavailable for Reddit search: {e}"
+                    ));
                 }
             }
         }
@@ -157,7 +163,10 @@ pub(crate) async fn exec_reddit_search(
     );
 
     if queries.is_empty() {
-        return crate::engine::workflows::StepResult::fail("No search queries found. The reddit_config_parse_stage should have extracted query_keywords or trigger_topics from reddit_config.md.".to_string());
+        return crate::engine::workflows::StepResult::fail(
+            "No search queries found. Fill query_keywords or trigger_topics in project.yaml (reddit block)."
+                .to_string(),
+        );
     }
 
     let search_pairs: Vec<(String, String)> = if seed_subs.is_empty() {
