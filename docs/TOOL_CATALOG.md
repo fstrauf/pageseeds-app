@@ -104,7 +104,7 @@ Article → short-form vertical video ([video clip spec](./video_clip_spec.md)).
 
 | Field | CLI Path B (`research-context` / `research-pull`) |
 |---|---|
-| **Does** | Packages shortlist/health for session strategy; pulls keyword candidates from **explicit seeds** via `custom_keyword_research` (no nested seed extraction/validation LLM). `research-context` may **write** shortlist via territory analysis when empty/stale (7d); `research-pull` does not. |
+| **Does** | Packages shortlist/health for session strategy; pulls keyword candidates from **explicit seeds** via `custom_keyword_research` (no nested seed extraction/validation LLM). `research-context` may **write** shortlist via territory analysis when empty/stale (7d) **and always injects** Primary/ACTIVE strategy seeds as pending fuel (not territory-only; issue #274); `research-pull` does not. |
 | **When** | Weekly CLI / outer-agent path when desk shows gap growth. Session proposes seeds; CLI runs deterministic Ahrefs/DataForSEO pipeline. |
 | **After completion** | Same `KeywordPicker` artifacts → `select-keywords` → write Path B. |
 
