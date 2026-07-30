@@ -592,10 +592,12 @@ when empty/stale via territory) then health (`promising` / `depleted` /
   **fallback only** when strategy is empty/unparseable **or** Primary/ACTIVE
   themes are exhausted/covered — not equal peers. If `content_strategy.status`
   is `empty` or `partial`, do **not** claim strategy gates applied — prefer fix
-  `project.md` (#279) or report skipped-research honesty before Path B seed
-  inventiveness. If strategy missing/empty, read
-  `<project-path>/.github/automation/project.md` Search Keywords + Content
-  Clusters yourself; if still empty, degrade to shortlist/desk and say so.
+  `project.yaml` (structured SOT) via setup / `pageseeds-cli strategy` /
+  `project-config-status` / `migrate-project-config` if legacy MD only, or
+  report skipped-research honesty before Path B seed inventiveness. If strategy
+  missing/empty, inspect `<project-path>/.github/automation/project.yaml`
+  (`search_keywords` + `clusters`); if YAML missing and only legacy MD exists,
+  migrate first. If still empty, degrade to shortlist/desk and say so.
 - **Never seed `do_not_expand` / LEGACY** (and deprioritize MAINTAIN vs
   ACTIVE/primary). After pull, reject those candidates before select-keywords.
   Final selection also hard-drops them in-core (`strategy_rejected` in the

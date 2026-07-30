@@ -49,7 +49,8 @@ Operator SoT: [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md) (desk-fi
 │         ▼                                                               │
 │   ┌──────────────────────────────────────────────────────────────┐     │
 │   │  SKILL.md (loaded from project automation dir or app defaults)│    │
-│   │  - reddit_config.md                                          │     │
+│   │  - project.yaml (structured strategy + Reddit knobs)         │     │
+│   │  - project.md (prose / brand context)                        │     │
 │   │  - content optimization instructions                         │     │
 │   │  - apply_fix skill                                           │     │
 │   └──────────────────────────────────────────────────────────────┘     │

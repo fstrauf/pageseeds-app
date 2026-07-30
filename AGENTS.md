@@ -16,7 +16,8 @@ Boot-time rules for coding agents. **Not** a product runbook or API catalog.
 |-------|----------|
 | Domain | `crates/pageseeds-core` |
 | CLI (thin) | `crates/pageseeds-cli` |
-| Store | SQLite (runtime) + JSON in the user's content repo |
+| Store | SQLite (runtime) + JSON/YAML in the user's content repo |
+| Project config | `.github/automation/project.yaml` (`ProjectConfig` — strategy + Reddit knobs SOT); `project.md` = prose/brand only |
 | LLM | `crates/pageseeds-core/src/rig/` (+ legacy `engine/agent.rs` fallback) |
 
 **Ship gate:** `pnpm test:cli` (alias `pnpm test:all`) = `cargo test -p pageseeds-core` → `check:task-store` → `check:cli-contract`. Also `cargo build -p pageseeds-cli` when the CLI surface changes. Install: `scripts/install-cli.sh` / [CLI_GETTING_STARTED](./docs/CLI_GETTING_STARTED.md).

@@ -197,7 +197,7 @@ Machine contract details (stdout/stderr/exit codes): [CONTRACTS.md](../CONTRACTS
 |------------|------|
 | [CLI_COMMERCIAL.md](./CLI_COMMERCIAL.md) | Free vs paid tool names |
 | [CLI_RELEASE.md](./CLI_RELEASE.md) | Version bump, `cli-v*` tags, GitHub release |
-| [PROJECT_MD_STRATEGY.md](./PROJECT_MD_STRATEGY.md) | Machine-parseable project.md strategy checklist |
+| [PROJECT_MD_STRATEGY.md](./PROJECT_MD_STRATEGY.md) | Strategy in `project.yaml` (+ legacy MD migrate); `strategy` / `project-config-status` / `migrate-project-config` |
 | [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md) | Weekly operator policy |
 | [CONTRACTS.md](../CONTRACTS.md) | Runtime / machine contracts |
 | [issue #177](https://github.com/fstrauf/pageseeds-app/issues/177) | Setup wizard |

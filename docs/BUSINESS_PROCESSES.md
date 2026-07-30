@@ -521,8 +521,9 @@ After `write_article` / Path B submit, auto-spawned `cluster_and_link` attaches 
 **Business value:** Reddit is high-intent traffic with strong community trust. Done well, Reddit engagement drives qualified visitors and builds brand authority. Done poorly, it gets you banned. This process finds the right conversations and drafts value-first replies.
 
 ### Inputs
-- `reddit_config.md` in project automation directory
-- Config defines: keywords, topics, subreddits, excluded subreddits
+- `project.yaml` Reddit block (`ProjectConfig` via `ensure_project_config`)
+- Fields: `query_keywords` / `trigger_topics`, `seed_subreddits`, `excluded_subreddits`, `mention_stance`, `product_name`
+- Legacy `reddit_config.md` is migrate-only (auto-migrated on first ensure if YAML missing)
 
 ### Process Flow
 
@@ -531,9 +532,9 @@ Task: reddit_opportunity_search
   ↓
 Handler: RedditHandler
   ↓
-Step 1: reddit_config_parse (agentic)
-  ├─ Agent reads reddit_config.md
-  └─ Extracts: trigger_keywords[], seed_subreddits[], excluded[]
+Step 1: reddit_config_parse (deterministic)
+  ├─ ensure_project_config → load ProjectConfig from project.yaml
+  └─ Structured: query_keywords / trigger_topics, seed_subreddits, excluded[]
   ↓
 Step 2: reddit_search (deterministic)
   ├─ Query Reddit JSON API for each keyword
@@ -541,7 +542,7 @@ Step 2: reddit_search (deterministic)
   └─ Persist raw posts to SQLite
   ↓
 Inline enrichment loop (after search succeeds):
-  ├─ Batch posts to Kimi
+  ├─ Batch posts to LLM
   ├─ Relevance scoring (1-10)
   ├─ Pain point extraction
   ├─ Content match suggestions
@@ -551,10 +552,10 @@ Status: review
 ```
 
 ### Key Files
-- `engine/exec/reddit.rs` — Reddit execution logic
+- `engine/exec/reddit/` — Reddit execution logic (YAML-first config parse)
+- `project_config/` — `ProjectConfig` load / ensure / migrate
 - `reddit/search.rs` — Reddit JSON API
 - `reddit/db.rs` — Opportunity persistence
-- `components/reddit/OpportunityFeed.tsx` — UI
 
 ### Data Model
 - `reddit_opportunities` table in SQLite
