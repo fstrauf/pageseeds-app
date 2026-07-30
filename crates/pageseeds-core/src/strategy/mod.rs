@@ -105,13 +105,32 @@ impl ClusterStatus {
 
 // ─── Load ────────────────────────────────────────────────────────────────────
 
-/// Load strategy from structured project config (`project.yaml`).
+/// Strategy plus ensure metadata for CLI / operators that need migration signal.
+///
+/// Serializes as a flat strategy object (`primary_keywords`, …) with an optional
+/// `project_config_auto_migrated: true` when ensure auto-migrated this call.
+/// `ensure_action` is for typed Rust consumers only (not in JSON).
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategyLoadOutcome {
+    #[serde(flatten)]
+    pub strategy: ProjectStrategy,
+    /// `Some(Loaded)` / `Some(AutoMigrated)` when ensure succeeded; `None` when
+    /// config was missing or invalid (research-safe empty strategy).
+    #[serde(skip)]
+    pub ensure_action: Option<EnsureAction>,
+    /// Convenience flag for CLI JSON; omitted when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub project_config_auto_migrated: bool,
+}
+
+/// Load strategy from structured project config (`project.yaml`) with ensure
+/// outcome metadata.
 ///
 /// Routes through [`ensure_project_config`]: valid YAML loads as-is; missing
 /// YAML with legacy MD auto-migrates then loads; missing everything or invalid
 /// YAML yields an empty strategy (research-safe). Never panics. Does **not**
 /// fall back to parsing MD when YAML is present or invalid.
-pub fn load_project_strategy(automation_dir: &Path) -> ProjectStrategy {
+pub fn load_project_strategy_detailed(automation_dir: &Path) -> StrategyLoadOutcome {
     let yaml_path = project_config_path(automation_dir);
     match ensure_project_config(automation_dir) {
         Ok((config, action)) => {
@@ -130,26 +149,47 @@ pub fn load_project_strategy(automation_dir: &Path) -> ProjectStrategy {
                     strategy.clusters.len()
                 );
             }
-            if matches!(action, EnsureAction::AutoMigrated) {
+            let project_config_auto_migrated = matches!(action, EnsureAction::AutoMigrated);
+            if project_config_auto_migrated {
                 log::info!(
                     "[strategy] project config was auto-migrated from legacy MD at {}",
                     yaml_path.display()
                 );
             }
-            strategy
+            StrategyLoadOutcome {
+                strategy,
+                ensure_action: Some(action),
+                project_config_auto_migrated,
+            }
         }
         Err(Error::ConfigMissing(_)) => {
             log::info!(
                 "[strategy] no project config at {} — empty strategy",
                 yaml_path.display()
             );
-            ProjectStrategy::default()
+            StrategyLoadOutcome {
+                strategy: ProjectStrategy::default(),
+                ensure_action: None,
+                project_config_auto_migrated: false,
+            }
         }
         Err(e) => {
             log::error!("[strategy] failed to load project config: {e}");
-            ProjectStrategy::default()
+            StrategyLoadOutcome {
+                strategy: ProjectStrategy::default(),
+                ensure_action: None,
+                project_config_auto_migrated: false,
+            }
         }
     }
+}
+
+/// Load strategy from structured project config (`project.yaml`).
+///
+/// Thin wrapper over [`load_project_strategy_detailed`] — returns only the
+/// strategy. Research-safe empty on missing/invalid config.
+pub fn load_project_strategy(automation_dir: &Path) -> ProjectStrategy {
+    load_project_strategy_detailed(automation_dir).strategy
 }
 
 /// Convenience: resolve automation dir from a project repo root path.
@@ -908,6 +948,12 @@ mod tests {
         let s = load_project_strategy(&dir);
         assert!(s.is_empty());
         assert!(!dir.join("project.yaml").exists());
+        let detailed = load_project_strategy_detailed(&dir);
+        assert!(detailed.strategy.is_empty());
+        assert!(detailed.ensure_action.is_none());
+        assert!(!detailed.project_config_auto_migrated);
+        let json = serde_json::to_value(&detailed).unwrap();
+        assert!(json.get("project_config_auto_migrated").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -917,12 +963,26 @@ mod tests {
         let dir = tempfile_dir("present");
         let mut f = std::fs::File::create(dir.join("project.md")).unwrap();
         f.write_all(FIXTURE.as_bytes()).unwrap();
-        let s = load_project_strategy(&dir);
-        assert!(!s.is_empty());
-        assert_eq!(s.primary_keywords.len(), 2);
-        assert_eq!(s.clusters.len(), 4);
-        assert_eq!(s, parse_project_strategy(FIXTURE));
+        let detailed = load_project_strategy_detailed(&dir);
+        assert!(!detailed.strategy.is_empty());
+        assert_eq!(detailed.strategy.primary_keywords.len(), 2);
+        assert_eq!(detailed.strategy.clusters.len(), 4);
+        assert_eq!(detailed.strategy, parse_project_strategy(FIXTURE));
+        assert_eq!(detailed.ensure_action, Some(EnsureAction::AutoMigrated));
+        assert!(detailed.project_config_auto_migrated);
         assert!(dir.join("project.yaml").exists());
+        // Flat CLI shape: strategy fields + flag, no nested strategy object.
+        let json = serde_json::to_value(&detailed).unwrap();
+        assert_eq!(json["project_config_auto_migrated"], true);
+        assert!(json.get("primary_keywords").is_some());
+        assert!(json.get("strategy").is_none());
+        assert!(json.get("ensure_action").is_none());
+        // Second load: YAML present → Loaded, no auto-migrated flag.
+        let second = load_project_strategy_detailed(&dir);
+        assert_eq!(second.ensure_action, Some(EnsureAction::Loaded));
+        assert!(!second.project_config_auto_migrated);
+        let json2 = serde_json::to_value(&second).unwrap();
+        assert!(json2.get("project_config_auto_migrated").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
