@@ -180,18 +180,24 @@ pub(crate) fn check_optional_config_files(automation_dir: &Path, checks: &mut Ve
         });
     }
 
-    // Legacy MD present but typed project.yaml not yet written (#291)
-    let project_yaml = automation_dir.join("project.yaml");
-    if !project_yaml.exists() && (project_md.exists() || reddit_config.exists()) {
+    // Align with canonical readiness (#291): invalid/unsupported YAML + legacy
+    // also needs migration (not only missing YAML).
+    let status = crate::project_config::project_config_status(automation_dir);
+    if status.needs_migration {
+        let detail = match status.yaml_valid {
+            Some(false) => {
+                "project.yaml is present but invalid; legacy project.md / reddit_config.md can still be migrated"
+                    .into()
+            }
+            _ => "Legacy project.md / reddit_config.md present but project.yaml is missing"
+                .into(),
+        };
         checks.push(SetupCheckItem {
             id: "project_config_needs_migration".into(),
             severity: Severity::Warn,
             title: "Project config not migrated to project.yaml".into(),
-            detail: "Legacy project.md / reddit_config.md present but project.yaml is missing"
-                .into(),
-            fix_hint: Some(
-                "Run: pageseeds-cli migrate-project-config -p . [--dry-run]".into(),
-            ),
+            detail,
+            fix_hint: Some(format!("Run: {}", status.hint)),
             auto_fixable: false,
         });
     }
