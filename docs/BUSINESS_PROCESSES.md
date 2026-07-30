@@ -73,7 +73,7 @@ themes; CLI runs deterministic pull without nested seed LLM.
 ```
 research-context  → shortlist + health + open research tasks
   ↓
-Session proposes seeds (desk + shortlist + brand)
+Session proposes seeds from strategy Primary/ACTIVE first; shortlist/desk only as fallback (not desk+shortlist+brand as equal peers)
   ↓
 research-pull -K "seed1,seed2,..."  → custom_keyword_research
   (description = seeds one per line; plan skips seed extraction/validation)
