@@ -1,5 +1,6 @@
-use super::{extract_user_context_from_description, load_search_params_from_artifact};
+use super::{extract_user_context_from_description, resolve_search_params};
 use crate::models::task::Task;
+use crate::reddit::config::MentionStance;
 use rusqlite::Connection;
 use serde::Deserialize;
 use std::path::Path;
@@ -271,8 +272,8 @@ pub fn persist_reddit_opportunities(
 /// Fetches up to 5 un-enriched posts per call; silently returns if none pending.
 ///
 /// Reads product_name and mention_stance from the reddit_config_parse_stage artifact
-/// (produced by the agentic config parse step). Falls back to deterministic parsing
-/// only if no artifact is found.
+/// (deterministic YAML/ProjectConfig parse). Falls back to ProjectConfig via ensure
+/// when no artifact is found; defaults if both fail.
 pub fn exec_reddit_enrich(
     conn: &Connection,
     task: &Task,
@@ -330,7 +331,7 @@ pub fn exec_reddit_enrich(
     log::info!("[reddit_enrich] {} posts to enrich", rows.len());
 
     let automation_dir = Path::new(project_path).join(".github").join("automation");
-    // Primary: project.md (consolidated). Fallback: legacy files.
+    // Prose context: project.md (consolidated). Fallback: legacy stitch.
     let project_context = std::fs::read_to_string(automation_dir.join("project.md"))
         .or_else(|_| {
             // Legacy fallback: stitch old files together
@@ -343,71 +344,57 @@ pub fn exec_reddit_enrich(
             Ok::<String, std::io::Error>(format!("{}\n\n{}\n\n{}", summary, brand, brief))
         })
         .unwrap_or_default();
-    let reddit_config_raw =
-        std::fs::read_to_string(automation_dir.join("reddit_config.md")).unwrap_or_default();
     let guardrails =
         std::fs::read_to_string(automation_dir.join("reddit").join("_reply_guardrails.md"))
             .unwrap_or_default();
 
-    if project_context.is_empty() && reddit_config_raw.is_empty() {
+    if project_context.is_empty() {
         log::warn!("[reddit_enrich] no project context — skipping");
         return;
     }
 
-    // Try to load structured params from the artifact (produced by reddit_config_parse_stage)
-    let (product_name, mention_stance_str, user_context) =
-        match load_search_params_from_artifact(task, project_path) {
-            Some(params) => {
-                let name = params
-                    .product_name
-                    .unwrap_or_else(|| "the product".to_string());
-                let stance = params.mention_stance.to_uppercase();
-                // Fall back to the task description for artifacts created before
-                // user_context was wired through.
-                let ctx = params
-                    .user_context
-                    .or_else(|| extract_user_context_from_description(task));
-                log::info!(
-                    "[reddit_enrich] using artifact params: product_name='{}', stance='{}'",
-                    name,
-                    stance
-                );
-                (name, stance, ctx)
+    // Artifact → ProjectConfig/YAML via shared resolver; defaults if both fail
+    let params = match resolve_search_params(task, project_path) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!(
+                "[reddit_enrich] ProjectConfig resolve failed: {} — using defaults",
+                e
+            );
+            super::RedditSearchParams {
+                user_context: extract_user_context_from_description(task),
+                ..Default::default()
             }
-            None => {
-                // Fallback: deterministic parse from reddit_config.md
-                log::info!(
-                    "[reddit_enrich] no artifact found, falling back to deterministic parse"
-                );
-                let cfg = crate::reddit::config::parse_reddit_config(&reddit_config_raw);
-                let name = cfg
-                    .product_name
-                    .unwrap_or_else(|| "the product".to_string());
-                let stance = cfg.mention_stance.as_str().to_string();
-                (name, stance, extract_user_context_from_description(task))
-            }
-        };
+        }
+    };
+    let product_name = params
+        .product_name
+        .unwrap_or_else(|| "the product".to_string());
+    let mention_stance = params.mention_stance;
+    let mention_stance_str = mention_stance.as_str();
+    let user_context = params.user_context;
+    log::info!(
+        "[reddit_enrich] using params: product_name='{}', stance='{}'",
+        product_name,
+        mention_stance_str
+    );
 
-    let stance_instruction = match mention_stance_str.as_str() {
-        "REQUIRED" => format!(
+    let stance_instruction = match mention_stance {
+        MentionStance::Required => format!(
             "REQUIRED: If you produce a non-empty reply, it MUST contain the exact product name \"{}\" exactly once, \
              late in the reply (not in the first 1–2 sentences). Answer the OP fully first. \
              If no answer-first reply with a natural late mention is possible, return empty `reply_text`.",
             product_name
         ),
-        "RECOMMENDED" => format!(
+        MentionStance::Recommended => format!(
             "RECOMMENDED: After answering the OP, you may mention \"{}\" by name if it fits naturally.",
             product_name
         ),
-        "OPTIONAL" => format!(
+        MentionStance::Optional => format!(
             "OPTIONAL: After answering the OP, you may mention \"{}\" if it fits naturally.",
             product_name
         ),
-        "OMIT" => "OMIT: Do NOT mention any product name in this reply.".to_string(),
-        _ => format!(
-            "OPTIONAL: After answering the OP, you may mention \"{}\" if it fits naturally.",
-            product_name
-        ),
+        MentionStance::Omit => "OMIT: Do NOT mention any product name in this reply.".to_string(),
     };
 
     // POSTS before product rules so the model sees the question before product pressure (#241).
@@ -437,9 +424,10 @@ pub fn exec_reddit_enrich(
         _ => String::new(),
     };
 
+    // Product/stance come from YAML (artifact or ensure); do not re-stuff
+    // reddit_config.md structured fields into the prompt.
     let context = format!(
         "## PROJECT CONTEXT\n{project_context}\n\n\
-         ## REDDIT CONFIG\n{reddit_config_raw}\n\n\
          {user_focus_block}\
          ## REPLY GUARDRAILS\n{guardrails}\n\n\
          ## POSTS (title + body)\n\
@@ -449,7 +437,6 @@ pub fn exec_reddit_enrich(
          Mention stance: {mention_stance_str}\n\
          {stance_instruction}",
         project_context = project_context,
-        reddit_config_raw = reddit_config_raw,
         user_focus_block = user_focus_block,
         guardrails = guardrails,
         posts_block = posts_block,
@@ -556,7 +543,7 @@ pub fn exec_reddit_enrich(
                 severity,
                 stored_reply,
                 reply_status,
-                &mention_stance_str,
+                mention_stance_str,
                 &product_name,
                 now,
                 post_id,

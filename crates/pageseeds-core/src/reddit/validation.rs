@@ -66,16 +66,18 @@ pub fn validate_reply(text: &str) -> ValidationResult {
 /// Validate a reply against project-specific guardrails (mention stance).
 ///
 /// Checks whether the reply mentions the product by name when the project's
-/// Reddit config requires it.
+/// `project.yaml` Reddit config requires it (via
+/// [`crate::project_config::ensure_project_config`]). Soft-passes when config
+/// is missing (same prior intent as MD load failure).
 pub fn validate_project_stance(text: &str, automation_dir: &std::path::Path) -> ValidationResult {
-    let Ok(cfg) = crate::reddit::config::load_reddit_config(automation_dir) else {
+    let Ok((cfg, _)) = crate::project_config::ensure_project_config(automation_dir) else {
         return ValidationResult {
             valid: true,
             error: None,
         };
     };
 
-    if cfg.mention_stance == crate::reddit::config::MentionStance::Required {
+    if cfg.reddit.mention_stance == crate::reddit::config::MentionStance::Required {
         if let Some(product) = &cfg.product_name {
             if !text.to_lowercase().contains(&product.to_lowercase()) {
                 return ValidationResult {

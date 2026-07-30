@@ -1,4 +1,4 @@
-use super::{load_search_params_from_artifact, parse_config_fallback};
+use super::resolve_search_params;
 use crate::models::task::Task;
 use rusqlite::Connection;
 use std::collections::HashSet;
@@ -116,24 +116,13 @@ pub(crate) async fn exec_reddit_search(
         handled_ids.len()
     );
 
-    // Try to load structured search params from artifact (produced by reddit_config_parse_stage)
-    let params = load_search_params_from_artifact(task, project_path);
-
-    // Fallback: parse config directly if no artifact (backward compatibility)
-    let params = match params {
-        Some(p) => p,
-        None => {
-            log::info!("[reddit_search] no structured params artifact found, falling back to direct config parse");
-            let config_path = format!("{}/.github/automation/reddit_config.md", project_path);
-            match std::fs::read_to_string(&config_path) {
-                Ok(config) => parse_config_fallback(&config),
-                Err(e) => {
-                    return crate::engine::workflows::StepResult::fail(format!(
-                            "reddit_config.md not found at {} — create it first: {}",
-                            config_path, e
-                        ))
-                }
-            }
+    // Artifact first, then ProjectConfig/YAML (not live MD parse)
+    let params = match resolve_search_params(task, project_path) {
+        Ok(p) => p,
+        Err(e) => {
+            return crate::engine::workflows::StepResult::fail(format!(
+                "project config unavailable for Reddit search: {e}"
+            ));
         }
     };
 
@@ -157,7 +146,10 @@ pub(crate) async fn exec_reddit_search(
     );
 
     if queries.is_empty() {
-        return crate::engine::workflows::StepResult::fail("No search queries found. The reddit_config_parse_stage should have extracted query_keywords or trigger_topics from reddit_config.md.".to_string());
+        return crate::engine::workflows::StepResult::fail(
+            "No search queries found. Fill query_keywords or trigger_topics in project.yaml (reddit block)."
+                .to_string(),
+        );
     }
 
     let search_pairs: Vec<(String, String)> = if seed_subs.is_empty() {
@@ -355,7 +347,7 @@ pub(crate) async fn exec_reddit_search(
                 "accessibility_score": accessibility,
                 "final_score": final_score,
                 "severity": severity,
-                "mention_stance": mention_stance,
+                "mention_stance": mention_stance.as_str(),
             }));
         }
         log::info!(
