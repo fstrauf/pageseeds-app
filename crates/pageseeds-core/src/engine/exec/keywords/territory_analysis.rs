@@ -166,6 +166,17 @@ pub fn run_territory_analysis(
         }
     }
 
+    // Inject Primary/ACTIVE strategy seeds as pending fuel (issue #274).
+    // Territory GSC rows stay; this adds product-gap terms with 0 impressions.
+    if let Err(e) =
+        crate::engine::research_shortlist_refresh::inject_strategy_shortlist_seeds(conn, project_id)
+    {
+        log::warn!(
+            "[territory_analysis] strategy shortlist inject failed (non-fatal): {}",
+            e
+        );
+    }
+
     // 4. Prune old covered entries
     let _ = crate::db::research_shortlist::prune_covered(conn, project_id, 30);
 

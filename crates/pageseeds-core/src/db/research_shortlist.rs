@@ -4,6 +4,8 @@
 /// Sources:
 ///   - territory_analysis: open / mid-coverage / saturated themes from desk
 ///     GSC tape (`gsc_page_daily`); fills shortlist for research (not final selection)
+///   - strategy_primary: operator Primary Keywords from `project.md` (issue #274)
+///   - strategy_active: ACTIVE cluster keyword bullets from `project.md` (issue #274)
 ///   - coverage_gap: thin clusters from keyword coverage analysis
 ///     (**documented future source** — no writer in-repo yet)
 ///   - manual: user-added entries
@@ -329,9 +331,13 @@ pub fn update_strategy_annotation(
 
 /// List pending shortlist entries for a project, excluding depleted themes.
 ///
-/// Prefer `health_status = 'promising'` first so product-adjacent themes that
-/// already show signal surface ahead of unproven high-priority heads when
-/// research feeds the KeywordPicker (issue #99).
+/// Order (issue #99 / #274):
+/// 1. `health_status = 'promising'` first so product-adjacent themes that
+///    already show signal surface ahead of unproven high-priority heads.
+/// 2. Within equal health, strategy fuel (`strategy_primary` then
+///    `strategy_active`) ahead of pure GSC / other heads so Path B can expand
+///    operator-declared product-gap terms with 0 impressions.
+/// 3. Then priority DESC, total_impressions DESC.
 pub fn list_pending_excluding_depleted(
     conn: &Connection,
     project_id: &str,
@@ -340,6 +346,7 @@ pub fn list_pending_excluding_depleted(
          FROM research_shortlist
          WHERE project_id = ?1 AND status = 'pending' AND health_status != 'depleted'
          ORDER BY CASE WHEN health_status = 'promising' THEN 0 ELSE 1 END,
+                  CASE WHEN source = 'strategy_primary' THEN 0 WHEN source = 'strategy_active' THEN 1 ELSE 2 END,
                   priority DESC,
                   total_impressions DESC";
     let mut stmt = conn.prepare(sql)?;
@@ -502,6 +509,43 @@ mod tests {
         // Within unproven, impressions DESC (same text priority).
         assert_eq!(entries[1].theme, "head term cluster");
         assert_eq!(entries[2].theme, "another unproven");
+    }
+
+    #[test]
+    fn list_pending_excluding_depleted_prefers_strategy_primary_over_equal_health_territory() {
+        let conn = in_memory_db();
+        // Equal health (unproven); strategy fuel must surface ahead of GSC heads
+        // even when territory has higher impressions (issue #274).
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, total_impressions, health_status, added_at)
+             VALUES ('proj1', 'gsc head theme', '[]', 'territory_analysis', 'pending', 'high', 50000.0, 'unproven', ?1)",
+            rusqlite::params![chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, total_impressions, health_status, added_at)
+             VALUES ('proj1', 'product gap primary', '[\"product gap primary\"]', 'strategy_primary', 'pending', 'high', 0.0, 'unproven', ?1)",
+            rusqlite::params![chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, total_impressions, health_status, added_at)
+             VALUES ('proj1', 'active cluster bullet', '[\"active cluster bullet\"]', 'strategy_active', 'pending', 'medium', 0.0, 'unproven', ?1)",
+            rusqlite::params![chrono::Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+
+        let entries = list_pending_excluding_depleted(&conn, "proj1").unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].theme, "product gap primary");
+        assert_eq!(entries[0].source, "strategy_primary");
+        assert_eq!(entries[1].theme, "active cluster bullet");
+        assert_eq!(entries[1].source, "strategy_active");
+        assert_eq!(entries[2].theme, "gsc head theme");
+        assert_eq!(entries[2].source, "territory_analysis");
     }
 
     #[test]
