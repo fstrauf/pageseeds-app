@@ -16,6 +16,7 @@
 ///       reddit/
 ///       manifest.json
 ///       project.md
+///       project.yaml        # typed ProjectConfig (see project_config module)
 ///       reddit_config.md
 /// ```
 use std::path::{Path, PathBuf};
