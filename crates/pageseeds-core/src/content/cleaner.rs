@@ -138,11 +138,19 @@ fn check_file(path: &Path, dry_run: bool) -> Result<Vec<CleaningIssue>> {
         }
     }
 
-    // Detect missing blank line after frontmatter close
-    let re_no_blank = Regex::new(r"\n---\n[^\n]").unwrap();
+    // Detect missing blank line after frontmatter close.
+    //
+    // Capture the first body character and put it back in the replacement.
+    // A prior pattern `r"\n---\n[^\n]"` with replace `"\n---\n\n"` *dropped*
+    // that character, turning `# Title` into ` Title` and `The intro` into
+    // `he intro` across every MDX file that lacked a blank line after
+    // frontmatter (triggered by publish / content_cleanup via
+    // `scan_and_clean(..., false)`).
+    // Note: the `regex` crate has no look-ahead — use a capture group.
+    let re_no_blank = Regex::new(r"\n---\n([^\n])").unwrap();
     if re_no_blank.is_match(&content) {
         let fixed = if !dry_run {
-            let fixed_content = re_no_blank.replace(&content, "\n---\n\n").to_string();
+            let fixed_content = re_no_blank.replace(&content, "\n---\n\n$1").to_string();
             std::fs::write(path, &fixed_content)?;
             true
         } else {
@@ -754,6 +762,63 @@ Second paragraph."#;
         assert!(types.contains(&"lowercase_intro"), "issues: {:?}", types);
 
         // cleanup
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression: blank-line insert must not eat the first body character.
+    /// Bug turned `# H1` → ` H1` and `The intro` → `he intro` on publish/cleanup.
+    #[test]
+    fn missing_blank_line_fix_preserves_h1_and_first_letter() {
+        let dir = std::env::temp_dir().join(format!(
+            "ps_cleaner_blank_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Case 1: H1 immediately after frontmatter close (no blank line)
+        let path_h1 = dir.join("h1.mdx");
+        std::fs::write(
+            &path_h1,
+            "---\ntitle: \"Cash Secured Puts Playbook\"\n---\n# Cash Secured Puts Playbook\n\nBody.\n",
+        )
+        .unwrap();
+        let issues = check_file(&path_h1, false).unwrap();
+        assert!(
+            issues.iter().any(|i| i.issue_type == "missing_blank_line" && i.fixed),
+            "expected fixed missing_blank_line: {:?}",
+            issues
+        );
+        let after = std::fs::read_to_string(&path_h1).unwrap();
+        assert!(
+            after.contains("---\n\n# Cash Secured Puts Playbook\n"),
+            "H1 must keep leading '#', got:\n{after}"
+        );
+        assert!(
+            !after.contains("\n Cash Secured Puts Playbook"),
+            "must not leave space-stripped H1"
+        );
+
+        // Case 2: prose first line (no H1) — first letter must survive
+        let path_prose = dir.join("prose.mdx");
+        std::fs::write(
+            &path_prose,
+            "---\ntitle: \"Wheel Guide\"\n---\nThe poor man's wheel strategy is great.\n",
+        )
+        .unwrap();
+        let _ = check_file(&path_prose, false).unwrap();
+        let after_prose = std::fs::read_to_string(&path_prose).unwrap();
+        assert!(
+            after_prose.contains("---\n\nThe poor man's wheel strategy is great.\n"),
+            "first letter of intro must not be eaten, got:\n{after_prose}"
+        );
+        assert!(
+            !after_prose.contains("\nhe poor man's"),
+            "must not produce 'he poor' from 'The poor'"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
