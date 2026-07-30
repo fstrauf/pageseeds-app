@@ -531,7 +531,7 @@ pub(crate) fn write_metrics_sync_marker(paths: &ProjectPaths) -> std::io::Result
 /// (e.g. `budget app template` for a project named `…-app`). Contract: only
 /// alphanumeric tokens of length >= 3, minus a small generic-word list, are
 /// treated as brand signals.
-fn derive_brand_tokens(project_name: &str, project_id: &str) -> Vec<String> {
+pub(crate) fn derive_brand_tokens(project_name: &str, project_id: &str) -> Vec<String> {
     /// Words too generic to identify a brand — common slug suffixes and
     /// TLD fragments that appear in ordinary non-branded queries.
     const GENERIC_WORDS: &[&str] = &[

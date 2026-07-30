@@ -167,6 +167,19 @@ pub fn keyword_occurrences(text_lower: &str, keyword: &str) -> usize {
     total / tokens.len()
 }
 
+/// True when raw query is fully wrapped in double quotes AND total_clicks == 0
+/// (scrape/bot noise pattern from GSC). Issue #304.
+///
+/// Must be evaluated on the **raw** query string (before quote stripping).
+pub fn is_quoted_zero_click_bot_noise(raw_query: &str, total_clicks: f64) -> bool {
+    if total_clicks != 0.0 {
+        return false;
+    }
+    let trimmed = raw_query.trim();
+    // Fully wrapped: starts and ends with `"`, with non-empty content inside.
+    trimmed.len() >= 3 && trimmed.starts_with('"') && trimmed.ends_with('"')
+}
+
 /// Maximum content words kept from a backfilled GSC query. Longer phrases
 /// can never appear in a 55-char title, so fix-pipeline keyword validation
 /// would be unsatisfiable (issue #74).
@@ -412,5 +425,25 @@ mod tests {
         let brand: Vec<String> = vec![];
         assert_eq!(normalize_backfilled_keyword("how to what is", &brand), None);
         assert_eq!(normalize_backfilled_keyword("", &brand), None);
+    }
+
+    #[test]
+    fn quoted_zero_click_is_bot_noise() {
+        assert!(is_quoted_zero_click_bot_noise("\"scraped quiz answer\"", 0.0));
+        assert!(is_quoted_zero_click_bot_noise("  \"inner phrase\"  ", 0.0));
+    }
+
+    #[test]
+    fn unquoted_or_with_clicks_not_bot_noise() {
+        // Same phrase unquoted survives.
+        assert!(!is_quoted_zero_click_bot_noise("scraped quiz answer", 0.0));
+        // Quoted but has clicks → not noise.
+        assert!(!is_quoted_zero_click_bot_noise("\"scraped quiz answer\"", 1.0));
+        assert!(!is_quoted_zero_click_bot_noise("\"scraped quiz answer\"", 0.5));
+        // Empty / incomplete wrap.
+        assert!(!is_quoted_zero_click_bot_noise("\"\"", 0.0));
+        assert!(!is_quoted_zero_click_bot_noise("\"only open", 0.0));
+        assert!(!is_quoted_zero_click_bot_noise("only close\"", 0.0));
+        assert!(!is_quoted_zero_click_bot_noise("", 0.0));
     }
 }

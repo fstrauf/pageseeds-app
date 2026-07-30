@@ -20,8 +20,8 @@ pub use gsc_join::{
 
 // Re-export shared CTR query primitives (desk + cannibalization SoT).
 pub use ctr_query::{
-    group_shared_query_articles, list_ctr_query_metrics_for_project, CtrQueryRow,
-    SHARED_QUERY_MAX_PAGES, SHARED_QUERY_MIN_IMPRESSIONS,
+    group_shared_query_articles, list_ctr_query_metrics_for_project, list_query_demand_for_project,
+    CtrQueryRow, QueryDemandRow, SHARED_QUERY_MAX_PAGES, SHARED_QUERY_MIN_IMPRESSIONS,
 };
 
 /// Get the default database path based on platform conventions.

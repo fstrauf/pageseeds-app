@@ -6,6 +6,8 @@
 ///     GSC tape (`gsc_page_daily`); fills shortlist for research (not final selection)
 ///   - strategy_primary: operator Primary Keywords from `project.md` (issue #274)
 ///   - strategy_active: ACTIVE cluster keyword bullets from `project.md` (issue #274)
+///   - gsc_uncovered: aggregated ctr_query_metrics demand with no article
+///     target_keyword / strategy coverage (issue #304)
 ///   - coverage_gap: thin clusters from keyword coverage analysis
 ///     (**documented future source** — no writer in-repo yet)
 ///   - manual: user-added entries

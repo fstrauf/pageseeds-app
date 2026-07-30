@@ -112,9 +112,130 @@ pub fn list_ctr_query_metrics_for_project(
     Ok(results)
 }
 
+/// Project-wide query demand aggregated across articles (issue #304).
+#[derive(Debug, Clone)]
+pub struct QueryDemandRow {
+    pub query: String,
+    pub impressions: f64,
+    pub clicks: f64,
+    pub avg_position: f64,
+}
+
+/// Aggregate query demand for a project:
+/// `SELECT query, SUM(impressions), SUM(clicks), AVG(avg_position)
+///  FROM ctr_query_metrics WHERE project_id=?1 GROUP BY lower(query)`
+///
+/// Note: SQLite GROUP BY lower(query) — pick a representative query string
+/// (MIN(query)) for the display form.
+pub fn list_query_demand_for_project(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Vec<QueryDemandRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT MIN(query), SUM(impressions), SUM(clicks), AVG(avg_position)
+         FROM ctr_query_metrics
+         WHERE project_id = ?1
+         GROUP BY lower(query)",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![project_id], |row| {
+        Ok(QueryDemandRow {
+            query: row.get(0)?,
+            impressions: row.get(1)?,
+            clicks: row.get(2)?,
+            avg_position: row.get(3)?,
+        })
+    })?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('p1', 'Test', '/tmp/ctr-query-test', 1, 'workspace')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles (
+                id, project_id, title, url_slug, file, status, target_keyword,
+                content_gaps_addressed, target_volume, word_count, review_count, content_hash
+             ) VALUES (1, 'p1', 'A', 'a', 'content/a.mdx', 'published', 'kw', '[]', 0, 100, 0, 'h')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO articles (
+                id, project_id, title, url_slug, file, status, target_keyword,
+                content_gaps_addressed, target_volume, word_count, review_count, content_hash
+             ) VALUES (2, 'p1', 'B', 'b', 'content/b.mdx', 'published', 'kw', '[]', 0, 100, 0, 'h')",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn insert_query(
+        conn: &Connection,
+        article_id: i64,
+        query: &str,
+        impressions: f64,
+        clicks: f64,
+        avg_position: f64,
+    ) {
+        conn.execute(
+            "INSERT INTO ctr_query_metrics
+             (project_id, article_id, page_url, query, impressions, clicks, ctr, avg_position, fetched_at)
+             VALUES ('p1', ?1, 'https://example.com/p', ?2, ?3, ?4, 0.01, ?5, '2026-01-01T00:00:00Z')",
+            rusqlite::params![article_id, query, impressions, clicks, avg_position],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn list_query_demand_aggregates_and_groups_case_insensitively() {
+        let conn = fixture_conn();
+        // Same query, different casing, two articles → one group.
+        insert_query(&conn, 1, "Best Cold Brew", 100.0, 5.0, 8.0);
+        insert_query(&conn, 2, "best cold brew", 50.0, 2.0, 12.0);
+        // Distinct query.
+        insert_query(&conn, 1, "monthly sub", 40.0, 1.0, 5.0);
+
+        let rows = list_query_demand_for_project(&conn, "p1").unwrap();
+        assert_eq!(rows.len(), 2);
+
+        let cold = rows
+            .iter()
+            .find(|r| r.query.to_lowercase() == "best cold brew")
+            .expect("cold brew group");
+        assert_eq!(cold.impressions, 150.0);
+        assert_eq!(cold.clicks, 7.0);
+        assert!((cold.avg_position - 10.0).abs() < 1e-9);
+        // Representative form is MIN(query) lexicographically.
+        assert_eq!(cold.query, "Best Cold Brew");
+
+        let monthly = rows.iter().find(|r| r.query == "monthly sub").unwrap();
+        assert_eq!(monthly.impressions, 40.0);
+        assert_eq!(monthly.clicks, 1.0);
+        assert_eq!(monthly.avg_position, 5.0);
+    }
+
+    #[test]
+    fn list_query_demand_empty_project() {
+        let conn = fixture_conn();
+        let rows = list_query_demand_for_project(&conn, "missing").unwrap();
+        assert!(rows.is_empty());
+    }
 
     #[test]
     fn group_shared_query_articles_respects_floor_cardinality_and_sort() {

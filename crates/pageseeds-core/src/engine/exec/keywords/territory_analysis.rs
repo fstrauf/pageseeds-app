@@ -177,6 +177,16 @@ pub fn run_territory_analysis(
         );
     }
 
+    // Inject uncovered GSC query demand as pending fuel (issue #304).
+    if let Err(e) =
+        crate::engine::research_shortlist_refresh::inject_gsc_uncovered_seeds(conn, project_id)
+    {
+        log::warn!(
+            "[territory_analysis] gsc_uncovered shortlist inject failed (non-fatal): {}",
+            e
+        );
+    }
+
     // 4. Prune old covered entries
     let _ = crate::db::research_shortlist::prune_covered(conn, project_id, 30);
 

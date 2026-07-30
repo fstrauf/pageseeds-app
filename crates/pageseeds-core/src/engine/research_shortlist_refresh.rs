@@ -1,9 +1,9 @@
 //! Research shortlist side effects for Path B `research-context`
-//! (issues #192 / #258 / #274).
+//! (issues #192 / #258 / #274 / #304).
 //!
-//! Owns territory refresh, strategy re-annotation, and Primary/ACTIVE strategy
-//! seed inject. Pure strategy package reads stay in
-//! [`super::research_package::build_research_strategy_package`].
+//! Owns territory refresh, strategy re-annotation, Primary/ACTIVE strategy
+//! seed inject, and GSC uncovered-demand inject. Pure strategy package reads
+//! stay in [`super::research_package::build_research_strategy_package`].
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,11 @@ pub const RESEARCH_SHORTLIST_MAX_AGE_DAYS: i64 = 7;
 
 /// Max Primary/ACTIVE strategy seed injects per call after filters (issue #274).
 pub const MAX_STRATEGY_SHORTLIST_INJECTS: usize = 15;
+
+/// Min aggregated impressions for a GSC query to inject as uncovered demand (#304).
+pub const MIN_UNCOVERED_QUERY_IMPRESSIONS: f64 = 10.0;
+/// Max gsc_uncovered shortlist injects per call (#304).
+pub const MAX_GSC_UNCOVERED_INJECTS: usize = 10;
 
 /// Stable reason strings for shortlist refresh (issue #192).
 pub mod shortlist_refresh_reason {
@@ -353,6 +358,218 @@ pub fn inject_strategy_shortlist_seeds(
     if injected > 0 {
         log::info!(
             "[research_shortlist_refresh] injected {} strategy shortlist seed(s) for project {}",
+            injected,
+            project_id
+        );
+    }
+    Ok(injected)
+}
+
+/// Inject aggregated GSC query demand that has no article `target_keyword` or
+/// strategy coverage as pending shortlist fuel (issue #304).
+///
+/// Breaks the research path's page-level-only blind spot: territory is
+/// page-level, strategy inject seeds from config, but real query-level demand
+/// in `ctr_query_metrics` was never read for shortlist.
+///
+/// - Source: `gsc_uncovered`
+/// - Floor: [`MIN_UNCOVERED_QUERY_IMPRESSIONS`] aggregated impressions
+/// - Filters: quoted zero-click bot noise, brand/junk via
+///   [`normalize_backfilled_keyword`](crate::content::keyword_match::normalize_backfilled_keyword),
+///   strategy primary/ACTIVE exact match, `strategy_blocks_expansion`, covered
+///   article target_keywords, existing pending|researched|covered themes
+/// - Cap: [`MAX_GSC_UNCOVERED_INJECTS`] by impressions desc
+/// - Exact normalized match only (no slug/title containment)
+///
+/// Always-on from [`super::research_package::build_research_context`] (after
+/// strategy inject) and after territory upserts.
+///
+/// Returns the count of successful upserts.
+pub fn inject_gsc_uncovered_seeds(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<usize, String> {
+    use std::collections::HashSet;
+
+    use crate::content::keyword_match::{
+        is_quoted_zero_click_bot_noise, normalize_backfilled_keyword, normalize_keyword,
+    };
+    use crate::db::research_shortlist::ResearchShortlistEntry;
+    use crate::engine::exec::gsc::derive_brand_tokens;
+    use crate::strategy::{match_cluster, strategy_blocks_expansion, ClusterStatus};
+
+    if project_id.trim().is_empty() {
+        return Ok(0);
+    }
+
+    let demand = crate::db::list_query_demand_for_project(conn, project_id)
+        .map_err(|e| e.to_string())?;
+    if demand.is_empty() {
+        return Ok(0);
+    }
+
+    let brand_tokens = match crate::engine::task_store::get_project(conn, project_id) {
+        Ok(project) => derive_brand_tokens(&project.name, project_id),
+        Err(_) => Vec::new(),
+    };
+
+    let strategy = crate::strategy::load_for_project(conn, project_id);
+
+    // Strategy primary + ACTIVE cluster keywords (exact normalize_keyword match).
+    let mut strategy_covered: HashSet<String> = HashSet::new();
+    for phrase in &strategy.primary_keywords {
+        let norm = normalize_keyword(phrase);
+        if !norm.is_empty() {
+            strategy_covered.insert(norm);
+        }
+    }
+    for cluster in &strategy.clusters {
+        if cluster.status != ClusterStatus::Active {
+            continue;
+        }
+        for phrase in &cluster.keywords {
+            let norm = normalize_keyword(phrase);
+            if !norm.is_empty() {
+                strategy_covered.insert(norm);
+            }
+        }
+    }
+
+    // Covered by published/catalog articles (same normalizer as strategy inject).
+    let articles = crate::engine::task_store::list_articles(conn, project_id)
+        .map_err(|e| e.to_string())?;
+    let covered_keywords: HashSet<String> = articles
+        .iter()
+        .filter_map(|a| a.target_keyword.as_deref())
+        .map(normalize_keyword)
+        .filter(|k| !k.is_empty())
+        .collect();
+
+    // Themes already fuel or done — any source, pending|researched|covered.
+    let entries = research_shortlist::list_entries(conn, project_id, None)
+        .map_err(|e| e.to_string())?;
+    let mut existing_themes: HashSet<String> = entries
+        .iter()
+        .filter(|e| matches!(e.status.as_str(), "pending" | "researched" | "covered"))
+        .map(|e| normalize_keyword(&e.theme))
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    // Filter + collect survivors: (theme, impressions). Dedupe by theme norm,
+    // keeping the highest-impressions row when backfill collapses variants.
+    let mut best_by_theme: std::collections::HashMap<String, (String, f64)> =
+        std::collections::HashMap::new();
+
+    for row in &demand {
+        if row.impressions < MIN_UNCOVERED_QUERY_IMPRESSIONS {
+            continue;
+        }
+        if is_quoted_zero_click_bot_noise(&row.query, row.clicks) {
+            log::debug!(
+                "[research_shortlist_refresh] gsc_uncovered skip query='{}' (quoted zero-click bot noise)",
+                row.query
+            );
+            continue;
+        }
+
+        let Some(theme) = normalize_backfilled_keyword(&row.query, &brand_tokens) else {
+            log::debug!(
+                "[research_shortlist_refresh] gsc_uncovered skip query='{}' (brand/junk)",
+                row.query
+            );
+            continue;
+        };
+
+        let norm = normalize_keyword(&theme);
+        if norm.is_empty() {
+            continue;
+        }
+
+        if strategy_covered.contains(&norm) {
+            log::debug!(
+                "[research_shortlist_refresh] gsc_uncovered skip theme='{}' (strategy primary/ACTIVE)",
+                theme
+            );
+            continue;
+        }
+        if strategy_blocks_expansion(&theme, &strategy) {
+            log::info!(
+                "[research_shortlist_refresh] gsc_uncovered skip theme='{}' (do_not_expand/LEGACY)",
+                theme
+            );
+            continue;
+        }
+        if covered_keywords.contains(&norm) {
+            log::debug!(
+                "[research_shortlist_refresh] gsc_uncovered skip theme='{}' (covered by article target_keyword)",
+                theme
+            );
+            continue;
+        }
+        if existing_themes.contains(&norm) {
+            log::debug!(
+                "[research_shortlist_refresh] gsc_uncovered skip theme='{}' (theme already on shortlist)",
+                theme
+            );
+            continue;
+        }
+
+        best_by_theme
+            .entry(norm)
+            .and_modify(|(_, imp)| {
+                if row.impressions > *imp {
+                    *imp = row.impressions;
+                }
+            })
+            .or_insert((theme, row.impressions));
+    }
+
+    let mut candidates: Vec<(String, f64)> = best_by_theme.into_values().collect();
+    // Sort by impressions desc, take top cap.
+    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.truncate(MAX_GSC_UNCOVERED_INJECTS);
+
+    let mut injected = 0usize;
+    for (theme, impressions) in candidates {
+        let mut entry = ResearchShortlistEntry::new(
+            project_id,
+            &theme,
+            vec![theme.clone()],
+            "gsc_uncovered",
+            "medium",
+            Some(0),
+            Some(impressions),
+        );
+        if let Some((cluster, status)) = match_cluster(&strategy, &theme) {
+            entry.strategy_cluster = Some(cluster.to_string());
+            entry.strategy_status = Some(status.as_str().to_string());
+        }
+
+        let norm = normalize_keyword(&theme);
+        match research_shortlist::upsert_entry(conn, &entry) {
+            Ok(_) => {
+                injected += 1;
+                existing_themes.insert(norm);
+                log::info!(
+                    "[research_shortlist_refresh] gsc_uncovered inject theme='{}' impressions={} project={}",
+                    theme,
+                    impressions,
+                    project_id
+                );
+            }
+            Err(e) => {
+                log::warn!(
+                    "[research_shortlist_refresh] gsc_uncovered upsert failed theme='{}': {}",
+                    theme,
+                    e
+                );
+            }
+        }
+    }
+
+    if injected > 0 {
+        log::info!(
+            "[research_shortlist_refresh] injected {} gsc_uncovered shortlist seed(s) for project {}",
             injected,
             project_id
         );
@@ -982,5 +1199,291 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ─── inject_gsc_uncovered_seeds (issue #304) ─────────────────────────────
+
+    fn insert_ctr_query(
+        conn: &Connection,
+        project_id: &str,
+        article_id: i64,
+        query: &str,
+        impressions: f64,
+        clicks: f64,
+        avg_position: f64,
+    ) {
+        conn.execute(
+            "INSERT INTO ctr_query_metrics
+             (project_id, article_id, page_url, query, impressions, clicks, ctr, avg_position, fetched_at)
+             VALUES (?1, ?2, 'https://example.com/p', ?3, ?4, ?5, 0.01, ?6, '2026-01-01T00:00:00Z')
+             ON CONFLICT(project_id, article_id, query) DO UPDATE SET
+                 impressions = excluded.impressions,
+                 clicks = excluded.clicks,
+                 avg_position = excluded.avg_position",
+            rusqlite::params![
+                project_id,
+                article_id,
+                query,
+                impressions,
+                clicks,
+                avg_position
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn inject_gsc_uncovered_only_high_imp_queries() {
+        let conn = ensure_fixture_db();
+        insert_ensure_project(&conn, "proj1");
+        insert_ensure_article(&conn, "proj1", 1, "a", "unrelated keyword");
+        // Above floor → inject.
+        insert_ctr_query(&conn, "proj1", 1, "cold brew concentrate recipe", 50.0, 2.0, 8.0);
+        // Below floor → drop.
+        insert_ctr_query(&conn, "proj1", 1, "tiny query phrase here", 5.0, 0.0, 20.0);
+
+        let n = inject_gsc_uncovered_seeds(&conn, "proj1").unwrap();
+        assert_eq!(n, 1);
+        let rows = research_shortlist::list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, "gsc_uncovered");
+        assert_eq!(rows[0].priority, "medium");
+        assert_eq!(rows[0].total_impressions, Some(50.0));
+        assert_eq!(rows[0].article_count, Some(0));
+        assert_eq!(rows[0].health_status, "unproven");
+        // Theme is titleable backfill form.
+        assert!(!rows[0].theme.is_empty());
+        assert_eq!(rows[0].seeds, vec![rows[0].theme.clone()]);
+    }
+
+    #[test]
+    fn inject_gsc_uncovered_excludes_bot_noise() {
+        let conn = ensure_fixture_db();
+        insert_ensure_project(&conn, "proj1");
+        insert_ensure_article(&conn, "proj1", 1, "a", "unrelated");
+        // Quoted + 0 clicks → bot noise.
+        insert_ctr_query(
+            &conn,
+            "proj1",
+            1,
+            "\"scraped quiz phrase noise\"",
+            100.0,
+            0.0,
+            5.0,
+        );
+        // Same phrase unquoted → survives.
+        insert_ctr_query(&conn, "proj1", 1, "real demand coffee guide", 80.0, 0.0, 7.0);
+        // Quoted with clicks → survives.
+        insert_ctr_query(&conn, "proj1", 1, "\"quoted but has clicks phrase\"", 60.0, 3.0, 9.0);
+
+        let n = inject_gsc_uncovered_seeds(&conn, "proj1").unwrap();
+        assert_eq!(n, 2);
+        let rows = research_shortlist::list_entries(&conn, "proj1", None).unwrap();
+        assert!(!rows.iter().any(|e| e.theme.contains("scraped quiz")));
+        assert!(rows.iter().any(|e| e.source == "gsc_uncovered"));
+    }
+
+    #[test]
+    fn inject_gsc_uncovered_excludes_brand_and_junk() {
+        let conn = ensure_fixture_db();
+        // Project name "Test" → brand token "test" (len >= 3).
+        // Use a project id that also yields a brand token.
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES ('expense-sorted', 'Expense Sorted', '/tmp/gsc-uncovered-brand', 1, 'workspace')",
+            [],
+        )
+        .unwrap();
+        insert_ensure_article(&conn, "expense-sorted", 1, "a", "unrelated");
+        // Brand query → drop.
+        insert_ctr_query(
+            &conn,
+            "expense-sorted",
+            1,
+            "expense sorted login",
+            100.0,
+            5.0,
+            3.0,
+        );
+        // Quiz junk → drop.
+        insert_ctr_query(
+            &conn,
+            "expense-sorted",
+            1,
+            "3. joelle wants emergency fund * 1 point",
+            90.0,
+            0.0,
+            4.0,
+        );
+        // Clean demand → inject.
+        insert_ctr_query(
+            &conn,
+            "expense-sorted",
+            1,
+            "budget spreadsheet template free",
+            70.0,
+            2.0,
+            8.0,
+        );
+
+        let n = inject_gsc_uncovered_seeds(&conn, "expense-sorted").unwrap();
+        assert_eq!(n, 1);
+        let rows = research_shortlist::list_entries(&conn, "expense-sorted", None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, "gsc_uncovered");
+        assert!(!rows[0].theme.contains("expense"));
+    }
+
+    #[test]
+    fn inject_gsc_uncovered_excludes_covered_target_keyword() {
+        let conn = ensure_fixture_db();
+        insert_ensure_project(&conn, "proj1");
+        // Article covers the exact backfilled theme. Query "cold brew concentrate"
+        // backfills to roughly the same tokens (stopwords dropped).
+        insert_ensure_article(&conn, "proj1", 1, "a", "cold brew concentrate");
+        insert_ctr_query(&conn, "proj1", 1, "cold brew concentrate", 100.0, 5.0, 4.0);
+        insert_ctr_query(&conn, "proj1", 1, "french press coffee tips", 80.0, 3.0, 6.0);
+
+        let n = inject_gsc_uncovered_seeds(&conn, "proj1").unwrap();
+        assert_eq!(n, 1);
+        let rows = research_shortlist::list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].theme.contains("french") || rows[0].theme.contains("press"));
+        assert!(!rows.iter().any(|e| e.theme == "cold brew concentrate"));
+    }
+
+    #[test]
+    fn inject_gsc_uncovered_excludes_strategy_primary_active_and_do_not_expand() {
+        let (conn, dir) = strategy_fixture_db(
+            r#"# Test
+
+## Search Keywords
+
+### Primary Keywords
+- keyword research tools
+
+### Do Not Expand
+- custom web design
+
+## Content Clusters
+
+### Cluster 1: SEO Fundamentals (ACTIVE)
+- technical seo checklist
+
+### Cluster 2: Agency (LEGACY)
+- web design packages
+"#,
+        );
+        insert_ensure_article(&conn, "proj1", 1, "a", "unrelated published");
+
+        // Primary exact (after backfill/normalize) → drop.
+        insert_ctr_query(&conn, "proj1", 1, "keyword research tools", 100.0, 5.0, 4.0);
+        // ACTIVE exact → drop.
+        insert_ctr_query(&conn, "proj1", 1, "technical seo checklist", 90.0, 4.0, 5.0);
+        // do_not_expand containment → drop.
+        insert_ctr_query(&conn, "proj1", 1, "custom web design agency", 80.0, 2.0, 6.0);
+        // Fresh uncovered → inject.
+        insert_ctr_query(&conn, "proj1", 1, "serp feature ranking guide", 70.0, 3.0, 7.0);
+
+        let n = inject_gsc_uncovered_seeds(&conn, "proj1").unwrap();
+        assert_eq!(n, 1, "only uncovered non-strategy demand; n={n}");
+        let rows = research_shortlist::list_entries(&conn, "proj1", None).unwrap();
+        let gsc: Vec<_> = rows.iter().filter(|e| e.source == "gsc_uncovered").collect();
+        assert_eq!(gsc.len(), 1);
+        assert!(
+            gsc[0].theme.contains("serp") || gsc[0].theme.contains("ranking"),
+            "theme={}",
+            gsc[0].theme
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inject_gsc_uncovered_caps_at_max() {
+        let conn = ensure_fixture_db();
+        insert_ensure_project(&conn, "proj1");
+        insert_ensure_article(&conn, "proj1", 1, "a", "unrelated");
+        // 15 distinct high-imp queries → only MAX inject.
+        // Differentiator must be a multi-char token so backfill does not collapse them.
+        let words = [
+            "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+            "india", "juliet", "kilo", "lima", "mike", "november", "oscar",
+        ];
+        for (i, w) in words.iter().enumerate() {
+            insert_ctr_query(
+                &conn,
+                "proj1",
+                1,
+                &format!("unique demand phrase {w}"),
+                100.0 - i as f64,
+                1.0,
+                8.0,
+            );
+        }
+
+        let n = inject_gsc_uncovered_seeds(&conn, "proj1").unwrap();
+        assert_eq!(n, MAX_GSC_UNCOVERED_INJECTS);
+        let rows = research_shortlist::list_entries(&conn, "proj1", None).unwrap();
+        assert_eq!(rows.len(), MAX_GSC_UNCOVERED_INJECTS);
+        assert!(rows.iter().all(|e| e.source == "gsc_uncovered"));
+        // Highest impressions first among injected.
+        let mut imps: Vec<f64> = rows.iter().filter_map(|e| e.total_impressions).collect();
+        imps.sort_by(|a, b| b.partial_cmp(a).unwrap());
+        assert_eq!(imps[0], 100.0); // alpha
+    }
+
+    #[test]
+    fn inject_gsc_uncovered_empty_project_id_and_idempotent() {
+        let conn = ensure_fixture_db();
+        insert_ensure_project(&conn, "proj1");
+        insert_ensure_article(&conn, "proj1", 1, "a", "unrelated");
+        insert_ctr_query(&conn, "proj1", 1, "fresh product demand phrase", 50.0, 2.0, 8.0);
+
+        assert_eq!(inject_gsc_uncovered_seeds(&conn, "").unwrap(), 0);
+        assert_eq!(inject_gsc_uncovered_seeds(&conn, "proj1").unwrap(), 1);
+        assert_eq!(inject_gsc_uncovered_seeds(&conn, "proj1").unwrap(), 0);
+    }
+
+    #[test]
+    fn inject_gsc_uncovered_via_build_research_context() {
+        use crate::engine::research_package::build_research_context;
+
+        let conn = ensure_fixture_db();
+        insert_ensure_project(&conn, "proj1");
+        insert_ensure_article(&conn, "proj1", 1, "a", "unrelated published");
+        // Fresh territory row so ensure skips.
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO research_shortlist
+             (project_id, theme, seeds, source, status, priority, health_status, added_at)
+             VALUES ('proj1', 'existing territory theme', '[]', 'territory_analysis', 'pending', 'high', 'unproven', ?1)",
+            rusqlite::params![now],
+        )
+        .unwrap();
+        insert_ctr_query(
+            &conn,
+            "proj1",
+            1,
+            "uncovered demand coffee beans",
+            120.0,
+            4.0,
+            5.0,
+        );
+
+        let ctx = build_research_context(&conn, "proj1", RESEARCH_SHORTLIST_MAX_AGE_DAYS).unwrap();
+        assert_eq!(
+            ctx.shortlist_refresh_reason,
+            shortlist_refresh_reason::SKIPPED_FRESH
+        );
+
+        let rows = research_shortlist::list_entries(&conn, "proj1", None).unwrap();
+        assert!(
+            rows.iter().any(|e| e.source == "gsc_uncovered"),
+            "build_research_context must inject gsc_uncovered; rows={rows:?}"
+        );
+        let gsc = rows.iter().find(|e| e.source == "gsc_uncovered").unwrap();
+        assert_eq!(gsc.total_impressions, Some(120.0));
+        assert_eq!(gsc.priority, "medium");
     }
 }
