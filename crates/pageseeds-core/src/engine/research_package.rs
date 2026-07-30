@@ -1293,6 +1293,7 @@ mod tests {
                             "no_data_or_kd_dropped": 3,
                             "intent_dropped": 1,
                             "strategy_rejected": 1,
+                            "relevance_dropped": 2,
                             "winnability_avoid_dropped": 1,
                             "final_selected": 3
                         },
@@ -1318,6 +1319,7 @@ mod tests {
         assert_eq!(funnel.pre_filter, 12);
         assert_eq!(funnel.volume_dropped, 4);
         assert_eq!(funnel.volume_unknown_kept, 2);
+        assert_eq!(funnel.relevance_dropped, 2);
         assert_eq!(funnel.final_selected, 3);
         let telemetry = extract_strategy_telemetry(&task);
         let items = telemetry.rejected_items.expect("strategy items");
@@ -1348,6 +1350,7 @@ mod tests {
                 no_data_or_kd_dropped: 3,
                 intent_dropped: 1,
                 strategy_rejected: 0,
+                relevance_dropped: 0,
                 winnability_avoid_dropped: 0,
                 final_selected: 2,
             }),
@@ -1373,6 +1376,7 @@ mod tests {
             no_data_or_kd_dropped: 8,
             intent_dropped: 2,
             strategy_rejected: 1,
+            relevance_dropped: 0,
             winnability_avoid_dropped: 0,
             final_selected: 2,
         };
