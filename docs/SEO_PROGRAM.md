@@ -87,8 +87,10 @@ notes: optional freeform (short)
 | **tools** | tools_queue commercial / calculator / screener pages | ≤2–3 |
 | **measure** | Due `content_outcome_review` + GSC movers + PostHog blog→signup | ≤1–2 reviews; light creates only if critical |
 
-**Every week** still runs measure as a soft side-pass (≤1–2 due outcome reviews)
-even when `current_mode` is attract/harvest/tools.
+**Every week** still runs measure as a **mandatory side-pass when due** (≤1–2
+due outcome reviews, post-`not_before` filter) even when `current_mode` is
+attract/harvest/tools. Skipping due rows is non-compliant; “none due” after
+filter is fine.
 
 ### Queue statuses
 
@@ -97,8 +99,8 @@ even when `current_mode` is attract/harvest/tools.
 | `open` | Ready to pick |
 | `in_progress` | Claimed this or prior week |
 | `shipped` | Published / fix submitted this cycle |
-| `measuring` | Waiting +30d `content_outcome_review` (or PostHog check) |
-| `done` | Closed-loop complete; leave or archive in monthly review |
+| `measuring` | Waiting +30d `content_outcome_review` (or PostHog check); weekly skill reads back and flips to `done` with classification note when the review executes |
+| `done` | Closed-loop complete (after measurement); leave or archive in monthly review |
 | `dropped` | Explicitly abandoned (note why) |
 
 **Do not** invent a second Primary keyword list. `primary_backlog[].keyword`
