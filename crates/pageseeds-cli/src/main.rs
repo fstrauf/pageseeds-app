@@ -266,7 +266,7 @@ Buy: https://pageseeds.com"
         // ── Path B fix package / submit (no nested generate) ──
         "fix-context" => {
             let slug = flag(&args, "--slug", "-S").unwrap_or_else(|| exit("--slug required"));
-            let kind_raw = flag(&args, "--kind", "-k").unwrap_or_else(|| exit("--kind content|ctr required"));
+            let kind_raw = flag(&args, "--kind", "-k").unwrap_or_else(|| exit("--kind content|ctr|refresh required"));
             let goals = flag(&args, "--goals", "-g");
             let period_days: Option<i64> = flag(&args, "--period-days", "-d")
                 .and_then(|s| s.parse().ok());
@@ -292,7 +292,7 @@ Buy: https://pageseeds.com"
         }
         "fix-submit" => {
             let slug = flag(&args, "--slug", "-S").unwrap_or_else(|| exit("--slug required"));
-            let kind_raw = flag(&args, "--kind", "-k").unwrap_or_else(|| exit("--kind content|ctr required"));
+            let kind_raw = flag(&args, "--kind", "-k").unwrap_or_else(|| exit("--kind content|ctr|refresh required"));
             let path = require_project_path();
             if project_id.is_empty() {
                 exit("--project-id required");
@@ -1913,7 +1913,7 @@ const TOOLS: &[ToolHelp] = &[
     ToolHelp {
         name: "fix-context",
         purpose: "Path B fix package (file + queries + skill; no generate)",
-        example: "fix-context -i <id> -p <path> -S <slug> -k content|ctr [-g goals]",
+        example: "fix-context -i <id> -p <path> -S <slug> -k content|ctr|refresh [-g goals]",
         section: "Path B fix",
     },
     ToolHelp {
