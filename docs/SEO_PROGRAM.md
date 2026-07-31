@@ -29,7 +29,11 @@ needs a typed shape. Freeform north-star MD re-creates silent drift
 | Program ops | `seo_program.yaml` | Skills: `/weekly-seo`, `/seo-program-review` |
 | Narrative | weekly / review reports | Humans |
 
-No multi-quarter task type in SQLite. No Rust program manager. Skills + files.
+No multi-quarter task type in SQLite. Skills remain the writers/SOT for
+`seo_program.yaml`. Rust **reads** `current_mode` (and a small task-type → mode
+family map) warn-only on `create-task` when the type is outside the current
+mode — never hard-refuses. There is no full program manager or mode enforcer
+in core.
 
 ---
 

@@ -13,5 +13,6 @@ pub mod queue;
 pub mod reddit;
 pub mod research;
 pub mod seo_discovery;
+pub mod seo_program;
 pub mod social;
 pub mod task;

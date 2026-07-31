@@ -727,7 +727,7 @@ async fn run_queue(db_path: PathBuf, gsc_token: Option<String>) {
                     &conn,
                     &task_id,
                     gsc_token_clone.as_deref(),
-                    false,
+                    &executor::ExecuteOpts::default(),
                 )
                 .await
             })
