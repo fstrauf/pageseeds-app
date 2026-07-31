@@ -163,24 +163,19 @@ fn reanchor_content_outcome_review(
     not_before: &str,
 ) -> crate::error::Result<()> {
     task_store::upsert_task_artifact(conn, task_id, target_artifact)?;
-
-    let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE tasks SET not_before = ?1, updated_at = ?2 WHERE id = ?3",
-        rusqlite::params![not_before, now, task_id],
-    )?;
+    // Dedicated helper — do not raw-SQL not_before or update_task (clobbers priority).
+    task_store::set_not_before(conn, task_id, Some(not_before))?;
 
     let title = format!("Content outcome review: {}", slug);
     let description = format!(
         "Compare GSC snapshot windows for '{}' {} days after {} (parent: {}).",
         slug, CONTENT_OUTCOME_REVIEW_DELAY_DAYS, parent.task_type, parent.id
     );
-    let _ = task_store::update_task(
+    let _ = task_store::update_task_title_description(
         conn,
         task_id,
         Some(&title),
         Some(&description),
-        crate::models::task::Priority::Medium,
     )?;
     Ok(())
 }

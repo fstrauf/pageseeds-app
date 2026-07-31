@@ -154,6 +154,26 @@ pub fn build_site_overview(
                         });
                     }
                 }
+            } else if let Some(b) = prev {
+                // Total collapse (#319): missing recent rollup ≡ 0 impressions when
+                // the prior window had enough signal. Without this, 500→0 only lands
+                // in zero_impression inventory and never declining_pages.
+                if b.impressions >= DECLINING_MIN_PREV_IMPRESSIONS {
+                    has_any_gsc = true;
+                    let recent_impressions = 0.0;
+                    let impressions_delta = recent_impressions - b.impressions;
+                    let drop_pct = 1.0;
+                    let clicks_delta = 0.0 - b.clicks;
+                    declining_candidates.push(DecliningPagesSample {
+                        slug: slug.clone(),
+                        title: Some(article.title.clone()),
+                        prev_impressions: b.impressions,
+                        recent_impressions,
+                        impressions_delta,
+                        drop_pct,
+                        clicks_delta,
+                    });
+                }
             }
         }
     }

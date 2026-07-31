@@ -309,6 +309,37 @@ pub fn update_task(
     get_task(conn, id)
 }
 
+/// Set or clear `not_before` without touching priority/title/description.
+pub fn set_not_before(conn: &Connection, id: &str, not_before: Option<&str>) -> Result<Task> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let rows = conn.execute(
+        "UPDATE tasks SET not_before = ?1, updated_at = ?2 WHERE id = ?3",
+        rusqlite::params![not_before, now, id],
+    )?;
+    if rows == 0 {
+        return Err(Error::Other(format!("Task '{id}' not found")));
+    }
+    get_task(conn, id)
+}
+
+/// Update title/description only — does **not** clobber priority (unlike [`update_task`]).
+pub fn update_task_title_description(
+    conn: &Connection,
+    id: &str,
+    title: Option<&str>,
+    description: Option<&str>,
+) -> Result<Task> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let rows = conn.execute(
+        "UPDATE tasks SET title = ?1, description = ?2, updated_at = ?3 WHERE id = ?4",
+        rusqlite::params![title, description, now, id],
+    )?;
+    if rows == 0 {
+        return Err(Error::Other(format!("Task '{id}' not found")));
+    }
+    get_task(conn, id)
+}
+
 /// Find the first active (todo or in_progress) task of a given type for a project.
 /// Used by `quick_run_workflow` to avoid creating duplicate tasks.
 pub fn find_active_task_by_type(

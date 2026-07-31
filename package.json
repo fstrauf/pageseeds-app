@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "scripts": {
     "test:rust": "if command -v cargo-nextest >/dev/null 2>&1; then cargo nextest run -p pageseeds-core; else cargo test -p pageseeds-core; fi",
-    "test:cli": "pnpm run test:rust && pnpm run check:task-store && pnpm run check:cli-contract",
+    "test:cli": "pnpm run test:rust && cargo test -p pageseeds-cli && pnpm run check:task-store && pnpm run check:cli-contract",
     "test:all": "pnpm run test:cli",
     "check:task-store": "./scripts/check-task-store-usage.sh",
     "check:cli-contract": "bash scripts/check-cli-contract.sh",
