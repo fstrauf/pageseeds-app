@@ -114,7 +114,7 @@ pub struct WorkflowStep {
 
 **Consolidate Cluster Flow** (`consolidate_cluster`):
 1. `merge_load_plan` → `merge_preflight` → `merge_extract_sections` → `merge_draft_patch` (agentic) → `merge_apply_patch`
-2. `merge_generate_redirects` → appends source→keeper rules to `.github/automation/redirects.csv`
+2. `merge_generate_redirects` → appends source→keeper rules to `.github/automation/redirects.csv` (warns when that file is gitignored/uncommittable so deploy may miss redirects)
 3. `merge_rewrite_inbound_links` (`MergeRewriteInboundLinks`) → deterministic: rewrites every `/blog/` link pointing at a redirected slug to the keeper URL across all MDX files
 4. `merge_validate_output` → validates keeper + redirect map, and asserts zero remaining links to redirected slugs
 5. `merge_sync_articles`

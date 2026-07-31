@@ -206,7 +206,7 @@ The content operations in `content/` assume this execution order. Skipping or re
 5. Publish   — preflight + apply
 ```
 
-**Locate precedence:** `project.content_dir` (if set) → heuristics scanning candidate paths. Always use `content::locator::find_content_dir()` — do not re-implement candidate scanning.
+**Locate precedence:** config-aware resolution via `content::ops::resolve_content_dir` (`seo_workspace.json` `content_dir` → project override → heuristics). Publish-content (`publish_by_slugs`) uses the same resolver. Prefer `resolve_content_dir` / `content::locator` — do not re-implement candidate scanning.
 
 **Sync side effect:** `content::ops::sync_articles()` only writes `articles.json` if the sync is clean. A failed sync leaves the file unchanged.
 

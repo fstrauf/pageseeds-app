@@ -385,7 +385,8 @@ pub struct PublishBySlugsResult {
 /// (no LLM resolution in v1). `needs_date_fix` articles are passed to
 /// [`apply_publish`] with empty date_fixes so apply auto-assigns dates.
 ///
-/// Content dir is `project_path.join("content")`.
+/// Content dir is resolved via `content::ops::resolve_content_dir` (seo_workspace.json /
+/// project override / auto-discovery), not a hardcoded `content/` path.
 pub fn publish_by_slugs(
     conn: &Connection,
     project_id: &str,
@@ -410,7 +411,8 @@ pub fn publish_by_slugs(
         return Err("at least one slug is required".to_string());
     }
 
-    let content_dir = project_path.join("content");
+    let automation_dir = project_path.join(".github").join("automation");
+    let content_dir = crate::content::ops::resolve_content_dir(&automation_dir, project_path)?;
     let all_articles = task_store::list_articles(conn, project_id).map_err(|e| e.to_string())?;
 
     let mut published = Vec::new();
@@ -918,7 +920,16 @@ mod tests {
     #[test]
     fn publish_by_slugs_missing_slug_is_error() {
         let dir = unique_temp_dir("ps_publish_by_slug_missing");
-        std::fs::create_dir_all(dir.join("content")).unwrap();
+        let auto_dir = dir.join(".github").join("automation");
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        // Pin content dir so resolve_content_dir succeeds without markdown files.
+        std::fs::write(
+            auto_dir.join("seo_workspace.json"),
+            r#"{"content_dir":"content"}"#,
+        )
+        .unwrap();
         let conn = in_memory_db();
         insert_project(&conn, &dir);
 
@@ -982,5 +993,62 @@ mod tests {
         insert_project(&conn, &dir);
         let err = publish_by_slugs(&conn, "p1", &dir, &[]).unwrap_err();
         assert!(err.contains("slug"));
+    }
+
+    #[test]
+    fn publish_by_slugs_uses_seo_workspace_content_dir() {
+        // content_dir is content/blog (not hardcoded content/) via seo_workspace.json.
+        let dir = unique_temp_dir("ps_publish_by_slug_blog_dir");
+        let auto_dir = dir.join(".github").join("automation");
+        let content_dir = dir.join("content").join("blog");
+        std::fs::create_dir_all(&content_dir).unwrap();
+        std::fs::create_dir_all(&auto_dir).unwrap();
+        std::fs::write(
+            auto_dir.join("seo_workspace.json"),
+            r#"{"content_dir":"content/blog"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            auto_dir.join("articles.json"),
+            r#"{"nextArticleId":2,"articles":[{"id":1,"title":"Blog Post","file":"./content/blog/001_blog_post.mdx","published_date":"2024-06-01","status":"draft"}]}"#,
+        )
+        .unwrap();
+        write_mdx(&content_dir.join("001_blog_post.mdx"), "Blog Post");
+
+        let conn = in_memory_db();
+        insert_project(&conn, &dir);
+        insert_article(
+            &conn,
+            1,
+            "Blog Post",
+            "blog-post",
+            "./content/blog/001_blog_post.mdx",
+            "draft",
+            Some("2024-06-01"),
+        );
+
+        let result =
+            publish_by_slugs(&conn, "p1", &dir, &["blog-post".into()]).expect("publish_by_slugs");
+
+        assert!(result.ok, "errors: {:?}", result.errors);
+        assert_eq!(result.published.len(), 1);
+        assert_eq!(result.published[0].slug, "blog-post");
+        assert_eq!(result.published[0].catalog_status, "published");
+
+        let db_status: String = conn
+            .query_row(
+                "SELECT status FROM articles WHERE id = 1 AND project_id = 'p1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(db_status, "published");
+
+        // MDX under content/blog must have been touched (status/date sync path).
+        let mdx = std::fs::read_to_string(content_dir.join("001_blog_post.mdx")).unwrap();
+        assert!(
+            mdx.contains("date:") || mdx.contains("Blog Post"),
+            "expected content under content/blog to remain readable: {mdx}"
+        );
     }
 }

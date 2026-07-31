@@ -765,3 +765,76 @@ fn assert_not_before_approx_30d(not_before: Option<&str>) {
         "not_before ~+30d, got {days} days"
     );
 }
+
+/// Issue #315: warn when redirects.csv is gitignored (write still succeeds).
+#[test]
+fn submit_warns_when_redirects_gitignored() {
+    let tmp = TempProjectDir::new();
+    fs::write(tmp.path().join(".gitignore"), ".github/automation/\n").unwrap();
+    let conn = in_memory_db(tmp.path().to_str().unwrap());
+    write_mdx(tmp.path(), "hub-page", "Hub", &pad_body(450));
+    write_mdx(tmp.path(), "old-page", "Old", &pad_body(80));
+    insert_article(&conn, 1, "hub-page", "Hub", "content/blog/hub_page.mdx");
+    insert_article(&conn, 2, "old-page", "Old", "content/blog/old_page.mdx");
+
+    let result = submit_merge(
+        &conn,
+        "proj1",
+        tmp.path(),
+        MergeSubmitOpts {
+            keep_url: Some("/blog/hub-page".into()),
+            redirect_urls: Some(vec!["/blog/old-page".into()]),
+            confirmed: false,
+            ..Default::default()
+        },
+    )
+    .expect("submit succeeds despite gitignore");
+
+    assert!(result.ok, "checks={:?}", result.checks);
+    assert!(result.redirects_written);
+    assert!(
+        result.redirects_warning.is_some(),
+        "expected redirects_warning when automation dir is gitignored"
+    );
+    assert!(
+        result
+            .redirects_warning
+            .as_deref()
+            .unwrap()
+            .contains("redirects.csv"),
+        "warning should mention redirects.csv: {:?}",
+        result.redirects_warning
+    );
+}
+
+#[test]
+fn submit_no_redirects_warning_when_gitignore_clean() {
+    let tmp = TempProjectDir::new();
+    fs::write(tmp.path().join(".gitignore"), "node_modules/\n").unwrap();
+    let conn = in_memory_db(tmp.path().to_str().unwrap());
+    write_mdx(tmp.path(), "hub-page", "Hub", &pad_body(450));
+    write_mdx(tmp.path(), "old-page", "Old", &pad_body(80));
+    insert_article(&conn, 1, "hub-page", "Hub", "content/blog/hub_page.mdx");
+    insert_article(&conn, 2, "old-page", "Old", "content/blog/old_page.mdx");
+
+    let result = submit_merge(
+        &conn,
+        "proj1",
+        tmp.path(),
+        MergeSubmitOpts {
+            keep_url: Some("/blog/hub-page".into()),
+            redirect_urls: Some(vec!["/blog/old-page".into()]),
+            confirmed: false,
+            ..Default::default()
+        },
+    )
+    .expect("submit succeeds");
+
+    assert!(result.ok, "checks={:?}", result.checks);
+    assert!(result.redirects_written);
+    assert!(
+        result.redirects_warning.is_none(),
+        "clean gitignore should not warn: {:?}",
+        result.redirects_warning
+    );
+}

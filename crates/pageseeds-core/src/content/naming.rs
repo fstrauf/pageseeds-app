@@ -47,13 +47,29 @@ pub(crate) fn detect_numbered_mdx_style(dir: &std::path::Path) -> Option<Numbere
     }
 }
 
-fn parse_numeric_prefix(filename: &str) -> Option<i64> {
+/// Parse a leading `{digits}_` numeric prefix from a markdown filename.
+///
+/// Shared by numbered-style path allocation and sync duplicate-prefix checks.
+pub(crate) fn parse_numeric_prefix(filename: &str) -> Option<i64> {
     let prefix = filename.split_once('_')?.0;
     if prefix.chars().all(|c| c.is_ascii_digit()) {
         prefix.parse::<i64>().ok()
     } else {
         None
     }
+}
+
+/// True when any markdown file in `dir` already uses numeric prefix `id`
+/// (e.g. `189_other.mdx` occupies id 189 regardless of slug).
+fn prefix_is_occupied(dir: &std::path::Path, id: i64) -> bool {
+    crate::content::locator::collect_markdown_files(dir)
+        .into_iter()
+        .filter_map(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+        })
+        .any(|name| parse_numeric_prefix(&name) == Some(id))
 }
 
 fn normalize_slug_underscored(stem: &str) -> String {
@@ -98,9 +114,10 @@ pub(crate) fn next_article_path(
         Some(style) => {
             let mut next_id = style.next_id;
             loop {
-                let candidate = dir.join(format!("{}_{}.mdx", next_id, slug));
-                if !candidate.exists() {
-                    break candidate;
+                // Skip any id already used as a numeric prefix by any file in
+                // the dir (not only the exact `{id}_{slug}.mdx` candidate).
+                if !prefix_is_occupied(dir, next_id) {
+                    break dir.join(format!("{}_{}.mdx", next_id, slug));
                 }
                 next_id += 1;
             }
@@ -261,6 +278,22 @@ mod tests {
         std::fs::write(dir.join("8_gamma_scalping.mdx"), "x").unwrap();
         let path = next_article_path(&dir, Some(NumberedMdxStyle { next_id: 7 }), "gamma scalping");
         assert_eq!(path, dir.join("9_gamma_scalping.mdx"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn next_article_path_skips_prefix_occupied_by_different_slug() {
+        // 189_other.mdx occupies prefix 189; asking for slug "something" at
+        // next_id 189 must not return 189_something.mdx.
+        let dir = temp_dir();
+        std::fs::write(dir.join("189_other.mdx"), "x").unwrap();
+        let path = next_article_path(
+            &dir,
+            Some(NumberedMdxStyle { next_id: 189 }),
+            "something",
+        );
+        assert_eq!(path, dir.join("190_something.mdx"));
+        assert_ne!(path, dir.join("189_something.mdx"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

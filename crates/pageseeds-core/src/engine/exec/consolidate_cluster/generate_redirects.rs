@@ -34,28 +34,40 @@ pub(crate) fn exec_merge_generate_redirects(task: &Task, project_path: &str) -> 
         })
         .collect();
 
+    let project = std::path::Path::new(project_path);
     let csv_path = match crate::engine::merge_apply::upsert_redirects_csv(
-        std::path::Path::new(project_path),
+        project,
         &keep_url,
         &redirect_urls,
     ) {
         Ok(p) => p,
         Err(e) => return StepResult::fail(e),
     };
+    let redirects_warning =
+        crate::engine::merge_apply::redirects_gitignore_warning(project);
 
-    let output = serde_json::json!({
+    let mut output = serde_json::json!({
         "rules": rules,
         "csv_path": csv_path.to_string_lossy().to_string(),
         "count": rules.len(),
     });
+    if let Some(ref warn) = redirects_warning {
+        output["redirects_warning"] = serde_json::json!(warn);
+    }
+
+    let mut message = format!(
+        "Generated {} redirect rules -> {}",
+        rules.len(),
+        csv_path.display()
+    );
+    if let Some(ref warn) = redirects_warning {
+        message.push_str(" — ");
+        message.push_str(warn);
+    }
 
     StepResult {
         success: true,
-        message: format!(
-            "Generated {} redirect rules -> {}",
-            rules.len(),
-            csv_path.display()
-        ),
+        message,
         output: Some(serde_json::to_string_pretty(&output).unwrap_or_default()),
         artifact_key: None,
     }

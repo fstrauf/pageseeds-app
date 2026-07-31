@@ -138,6 +138,74 @@ pub fn upsert_redirects_csv(
     Ok(csv_path)
 }
 
+/// Pure-Rust heuristic: warn when `.gitignore` likely covers `redirects.csv`
+/// (or a parent), so the file may not be committed/deployed.
+///
+/// Checks `.gitignore` at repo root, `.github/`, and `.github/automation/`
+/// when present. No git subprocess; matches common path patterns only.
+pub fn redirects_gitignore_warning(project_path: &Path) -> Option<String> {
+    if !redirects_path_is_gitignored(project_path) {
+        return None;
+    }
+    Some(
+        "WARNING: redirects.csv appears to be covered by .gitignore and may not be committed. \
+         Commit redirects.csv or port the rules into your deploy config (e.g. next.config) \
+         so redirects ship with the site."
+            .to_string(),
+    )
+}
+
+/// Returns true when a .gitignore in the chain likely covers
+/// `.github/automation/redirects.csv`.
+fn redirects_path_is_gitignored(project_path: &Path) -> bool {
+    let gitignore_paths = [
+        project_path.join(".gitignore"),
+        project_path.join(".github").join(".gitignore"),
+        project_path
+            .join(".github")
+            .join("automation")
+            .join(".gitignore"),
+    ];
+    for gi in &gitignore_paths {
+        if let Ok(content) = std::fs::read_to_string(gi) {
+            if gitignore_content_covers_redirects(&content) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Match common .gitignore patterns that would hide redirects.csv.
+fn gitignore_content_covers_redirects(content: &str) -> bool {
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+            continue;
+        }
+        if gitignore_pattern_covers_redirects(line) {
+            return true;
+        }
+    }
+    false
+}
+
+fn gitignore_pattern_covers_redirects(pattern: &str) -> bool {
+    // Leading slash = repo-root anchored; trailing slash / /** = directory.
+    let p = pattern.trim_start_matches('/');
+    let p = p.strip_suffix("/**").unwrap_or(p);
+    let p = p.trim_end_matches('/');
+
+    matches!(
+        p,
+        "redirects.csv"
+            | ".github/automation/redirects.csv"
+            | "automation/redirects.csv"
+            | ".github/automation"
+            | "automation"
+    )
+}
+
 // ─── Inbound link rewrite ────────────────────────────────────────────────────
 
 /// Rewrite every `/blog/` link that points at a redirected slug to the keeper
@@ -291,4 +359,77 @@ pub fn depublish_redirect_slugs(
     }
 
     Ok(depublished)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("{prefix}_{nanos}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".github").join("automation")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn redirects_warning_when_automation_dir_gitignored() {
+        let dir = unique_temp_dir("ps_redir_gi");
+        std::fs::write(dir.join(".gitignore"), ".github/automation/\n").unwrap();
+        let warn = redirects_gitignore_warning(&dir);
+        assert!(
+            warn.is_some(),
+            "expected warning when .github/automation/ is gitignored"
+        );
+        assert!(
+            warn.as_deref().unwrap().contains("redirects.csv"),
+            "warning should mention redirects.csv: {warn:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn redirects_warning_absent_when_gitignore_clean() {
+        let dir = unique_temp_dir("ps_redir_clean");
+        std::fs::write(dir.join(".gitignore"), "node_modules/\n*.log\n").unwrap();
+        assert!(
+            redirects_gitignore_warning(&dir).is_none(),
+            "clean gitignore should not warn"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn redirects_warning_matches_exact_csv_and_slash_variants() {
+        assert!(gitignore_pattern_covers_redirects("redirects.csv"));
+        assert!(gitignore_pattern_covers_redirects("/.github/automation/"));
+        assert!(gitignore_pattern_covers_redirects("automation/"));
+        assert!(gitignore_pattern_covers_redirects(
+            ".github/automation/redirects.csv"
+        ));
+        assert!(!gitignore_pattern_covers_redirects("node_modules/"));
+        assert!(!gitignore_pattern_covers_redirects("*.log"));
+    }
+
+    #[test]
+    fn upsert_redirects_csv_writes_file() {
+        let dir = unique_temp_dir("ps_redir_write");
+        let path = upsert_redirects_csv(
+            &dir,
+            "/blog/keep",
+            &["/blog/old".to_string()],
+        )
+        .unwrap();
+        assert!(path.exists());
+        let csv = std::fs::read_to_string(&path).unwrap();
+        assert!(csv.contains("/blog/old"));
+        assert!(csv.contains("/blog/keep"));
+        assert!(csv.contains("301"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
