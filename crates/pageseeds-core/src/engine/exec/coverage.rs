@@ -146,13 +146,6 @@ pub(crate) fn build_coverage_article_summaries(
         .collect()
 }
 
-/// Producer wall-clock stamp for automation state files (issue #316).
-/// Overwrites any model-fabricated `generated_at`.
-pub(crate) fn stamp_state_generated_at(doc: &mut serde_json::Value) {
-    doc["generated_at"] =
-        serde_json::Value::String(chrono::Utc::now().to_rfc3339());
-}
-
 fn slug_from_live_site_path(path: &str) -> String {
     let trimmed = path.trim().trim_matches('/');
     if trimmed.is_empty() {
@@ -430,7 +423,7 @@ pub(crate) fn exec_coverage_cluster_analysis(
     });
 
     // Producer stamps wall-clock; never trust model-fabricated generated_at (#316).
-    stamp_state_generated_at(&mut clusters);
+    crate::engine::exec::common::stamp_state_generated_at(&mut clusters);
 
     // NEW: Enhance clusters with authority scores and gap detection
     log::info!("[coverage_cluster] Enhancing clusters with authority scores");
@@ -773,21 +766,6 @@ mod tests {
             ctr: 0.01,
             position,
         }
-    }
-
-    #[test]
-    fn stamp_state_generated_at_overwrites_model_timestamp() {
-        let mut doc = serde_json::json!({
-            "generated_at": "2023-01-01T00:00:00Z",
-            "clusters": [],
-        });
-        stamp_state_generated_at(&mut doc);
-        let stamped = doc["generated_at"].as_str().unwrap();
-        assert_ne!(stamped, "2023-01-01T00:00:00Z");
-        // Must parse as RFC3339 and be recent (within last minute).
-        let parsed = chrono::DateTime::parse_from_rfc3339(stamped).expect("rfc3339");
-        let age = Utc::now().signed_duration_since(parsed.with_timezone(&Utc));
-        assert!(age.num_seconds().abs() < 60, "stamped time should be now-ish: {stamped}");
     }
 
     #[test]

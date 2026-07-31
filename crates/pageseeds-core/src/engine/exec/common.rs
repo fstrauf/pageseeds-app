@@ -180,6 +180,18 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T, context: &str) -> Result
     }
 }
 
+// ─── Automation state file integrity (issue #316) ─────────────────────────────
+
+/// Producer wall-clock stamp for automation state files (issue #316).
+///
+/// Overwrites any model-fabricated `generated_at` with the current UTC time in
+/// RFC3339. Call after agent extract (and on healthy-skip paths) before
+/// persisting producer-written state such as `keyword_coverage.json` or
+/// `links_to_add.json`.
+pub(crate) fn stamp_state_generated_at(doc: &mut serde_json::Value) {
+    doc["generated_at"] = serde_json::Value::String(chrono::Utc::now().to_rfc3339());
+}
+
 // ─── GSC metrics staleness ────────────────────────────────────────────────────
 
 /// Maximum tolerated age of the Search Analytics metrics before downstream
@@ -214,11 +226,39 @@ pub fn ctr_metrics_staleness_warning(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
 
     fn in_memory_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::db::init_with_conn(&conn).unwrap();
         conn
+    }
+
+    #[test]
+    fn stamp_state_generated_at_overwrites_model_timestamp() {
+        let mut doc = serde_json::json!({
+            "generated_at": "2023-01-01T00:00:00Z",
+            "clusters": [],
+        });
+        stamp_state_generated_at(&mut doc);
+        let stamped = doc["generated_at"].as_str().unwrap();
+        assert_ne!(stamped, "2023-01-01T00:00:00Z");
+        // Must parse as RFC3339 and be recent (within last minute).
+        let parsed = chrono::DateTime::parse_from_rfc3339(stamped).expect("rfc3339");
+        let age = Utc::now().signed_duration_since(parsed.with_timezone(&Utc));
+        assert!(
+            age.num_seconds().abs() < 60,
+            "stamped time should be now-ish: {stamped}"
+        );
+    }
+
+    #[test]
+    fn stamp_state_generated_at_sets_field_when_absent() {
+        let mut doc = serde_json::json!({ "links_to_add": [] });
+        stamp_state_generated_at(&mut doc);
+        let stamped = doc["generated_at"].as_str().unwrap();
+        assert!(!stamped.is_empty());
+        chrono::DateTime::parse_from_rfc3339(stamped).expect("rfc3339");
     }
 
     fn insert_metric(conn: &rusqlite::Connection, project_id: &str, fetched_at: &str) {
