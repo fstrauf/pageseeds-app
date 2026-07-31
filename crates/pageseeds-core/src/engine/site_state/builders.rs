@@ -264,16 +264,32 @@ pub fn build_site_overview(
     };
 
     // Declining: largest impression losses first; sample capped (#305).
-    declining_candidates.sort_by(|a, b| {
-        a.impressions_delta
-            .partial_cmp(&b.impressions_delta)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let declining_count = declining_candidates.len();
-    declining_candidates.truncate(OVERVIEW_INVENTORY_SAMPLE_CAP);
-    let declining_pages = DecliningPagesInventory {
-        count: declining_count,
-        sample: declining_candidates,
+    // Freshness guard mirrors zero_impression: do not surface declining
+    // inventory from missing/stale GSC tape (#323). Do not gate on empty
+    // recent window — total-collapse 500→0 still counts when tape is fresh (#319).
+    let declining_pages = if freshness.source == "none" || freshness.stale {
+        DecliningPagesInventory {
+            count: 0,
+            sample: vec![],
+            degraded_reason: Some(if freshness.source == "none" {
+                "gsc_missing".into()
+            } else {
+                "gsc_stale".into()
+            }),
+        }
+    } else {
+        declining_candidates.sort_by(|a, b| {
+            a.impressions_delta
+                .partial_cmp(&b.impressions_delta)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let declining_count = declining_candidates.len();
+        declining_candidates.truncate(OVERVIEW_INVENTORY_SAMPLE_CAP);
+        DecliningPagesInventory {
+            count: declining_count,
+            sample: declining_candidates,
+            degraded_reason: None,
+        }
     };
 
     let hard_cannibalization = build_hard_cannibalization_inventory(conn, project_id, &articles);

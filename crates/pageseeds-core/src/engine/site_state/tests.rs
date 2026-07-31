@@ -1344,6 +1344,7 @@ fn declining_pages_empty_without_prior_window() {
 
 /// Total collapse 500→0 with **no recent rollup rows** must still appear in
 /// declining_pages (#319). Prior code required both recent and prev Some(_).
+/// Uses fresh `fetched_at` so freshness guard does not zero the inventory (#323).
 #[test]
 fn declining_pages_total_collapse_missing_recent_rollup() {
     let conn = in_memory_db();
@@ -1373,6 +1374,7 @@ fn declining_pages_total_collapse_missing_recent_rollup() {
         overview.declining_pages.count, 1,
         "500→0 missing-recent must count as declining"
     );
+    assert!(overview.declining_pages.degraded_reason.is_none());
     let sample = overview
         .declining_pages
         .sample
@@ -1384,6 +1386,86 @@ fn declining_pages_total_collapse_missing_recent_rollup() {
     assert!((sample.drop_pct - 1.0).abs() < 1e-9);
     assert!(
         overview
+            .hints
+            .iter()
+            .any(|h| h == "Declining-impression pages present")
+    );
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+/// Stale GSC tape must not surface declining_pages (#323). Prior-window-only
+/// collapse would otherwise qualify under #319 total-collapse semantics.
+#[test]
+fn declining_pages_degraded_when_gsc_stale() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(
+        &conn, "proj1", 1, "collapsed", "Collapsed", "content/c.mdx", "published", 100,
+    );
+
+    let (p1, _) = previous_dates();
+    crate::db::insert_gsc_page_daily_snapshots(
+        &conn,
+        "proj1",
+        &[daily_row(
+            "https://example.com/blog/collapsed",
+            &p1,
+            20.0,
+            500.0,
+        )],
+    )
+    .unwrap();
+
+    // insert stamps fetched_at = now; backdate past freshness threshold.
+    let old_fetched = (Utc::now() - Duration::days(10)).to_rfc3339();
+    conn.execute(
+        "UPDATE gsc_page_daily SET fetched_at = ?1 WHERE project_id = ?2",
+        rusqlite::params![old_fetched, "proj1"],
+    )
+    .unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert!(overview.freshness.stale);
+    assert_eq!(overview.declining_pages.count, 0);
+    assert!(overview.declining_pages.sample.is_empty());
+    assert_eq!(
+        overview.declining_pages.degraded_reason.as_deref(),
+        Some("gsc_stale")
+    );
+    assert!(
+        !overview
+            .hints
+            .iter()
+            .any(|h| h == "Declining-impression pages present")
+    );
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+/// Missing GSC tape → empty declining inventory with gsc_missing (#323).
+#[test]
+fn declining_pages_degraded_when_gsc_missing() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(
+        &conn, "proj1", 1, "lonely", "Lonely", "content/l.mdx", "published", 100,
+    );
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.freshness.source, "none");
+    assert_eq!(overview.declining_pages.count, 0);
+    assert!(overview.declining_pages.sample.is_empty());
+    assert_eq!(
+        overview.declining_pages.degraded_reason.as_deref(),
+        Some("gsc_missing")
+    );
+    assert!(
+        !overview
             .hints
             .iter()
             .any(|h| h == "Declining-impression pages present")

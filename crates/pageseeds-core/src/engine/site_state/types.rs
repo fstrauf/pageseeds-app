@@ -163,6 +163,8 @@ pub struct StrikingDistanceSample {
 pub struct DecliningPagesInventory {
     pub count: usize,
     pub sample: Vec<DecliningPagesSample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub degraded_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
