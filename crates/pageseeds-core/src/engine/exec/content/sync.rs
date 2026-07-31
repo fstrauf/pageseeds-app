@@ -25,6 +25,18 @@ pub(crate) fn exec_content_sync(
         &task.project_id,
     ) {
         Ok(result) => {
+            // Best-effort re-export so articles.json cannot lag SQLite (#316).
+            if let Err(e) = crate::content::article_index::export_projection(
+                conn,
+                &task.project_id,
+                &paths.repo_root,
+            ) {
+                log::warn!(
+                    "[content_sync] Failed to re-export articles.json after sync: {}",
+                    e
+                );
+            }
+
             let output =
                 serde_json::to_string_pretty(&result).unwrap_or_else(|_| format!("{:?}", result));
             let ok = result.missing_files.is_empty() && result.malformed_file_refs.is_empty();

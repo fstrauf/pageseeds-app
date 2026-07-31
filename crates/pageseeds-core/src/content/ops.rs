@@ -148,6 +148,9 @@ pub struct SyncValidateResult {
     pub duplicate_file_refs: Vec<SyncIssue>,
     /// Files that share the same numeric prefix (e.g. `189_a.mdx` + `189_b.mdx`).
     pub duplicate_prefixes: Vec<SyncIssue>,
+    /// DB article rows missing from (or projection ids missing in) `articles.json`.
+    /// Missing projection file is treated as "never exported" (empty lag).
+    pub export_lag: Vec<SyncIssue>,
     pub date_mismatches: Vec<SyncIssue>,
     pub dates_synced: usize,
     pub fixable_mismatches: usize,
@@ -387,10 +390,16 @@ pub fn sync_and_validate(
     let mut orphan_files: Vec<String> = remaining.into_iter().collect();
     orphan_files.sort();
 
+    // 5. Export lag: DB ids vs read-only articles.json projection.
+    // Missing file = never exported → empty lag (tolerate).
+    let export_lag = detect_export_lag(automation_dir, &articles);
+
     let next_action = if !duplicate_prefixes.is_empty() {
         "Resolve duplicate numeric prefixes in content filenames"
     } else if !missing_files.is_empty() {
         "Fix missing content files referenced by articles.json"
+    } else if !export_lag.is_empty() {
+        "Re-export articles.json — SQLite and projection are out of sync"
     } else if !malformed_file_refs.is_empty() {
         "Fix malformed file references in articles.json"
     } else if !date_mismatches.is_empty() && !apply_sync {
@@ -420,6 +429,7 @@ pub fn sync_and_validate(
         malformed_file_refs,
         duplicate_file_refs,
         duplicate_prefixes,
+        export_lag,
         date_mismatches,
         dates_synced,
         fixable_mismatches,
@@ -427,77 +437,71 @@ pub fn sync_and_validate(
     })
 }
 
-/// Clean stale entries from articles.json — remove articles whose files no longer exist.
-/// The source of truth is the filesystem. Returns the list of removed article titles.
-#[allow(dead_code)]
-pub fn clean_stale_articles_json(
+/// Diff SQLite article ids against `.github/automation/articles.json` (read-only).
+///
+/// Missing or unreadable projection → empty (treated as never exported).
+fn detect_export_lag(
     automation_dir: &Path,
-    repo_root: &Path,
-) -> std::result::Result<Vec<String>, String> {
-    let articles_path = automation_dir.join("articles.json");
-    let json_str = std::fs::read_to_string(&articles_path).map_err(|e| {
-        format!(
-            "articles.json not found at {}: {}",
-            articles_path.display(),
-            e
-        )
-    })?;
-    let mut doc: serde_json::Value = serde_json::from_str(&json_str)
-        .map_err(|e| format!("Failed to parse articles.json: {}", e))?;
+    articles: &[crate::models::article::Article],
+) -> Vec<SyncIssue> {
+    let Some(proj_ids) = projection_article_ids(automation_dir) else {
+        return Vec::new();
+    };
 
-    let articles = doc
-        .get_mut("articles")
-        .and_then(|v| v.as_array_mut())
-        .ok_or_else(|| "articles.json must contain an 'articles' array".to_string())?;
+    let mut lag = Vec::new();
+    let db_ids: HashSet<i64> = articles.iter().map(|a| a.id).collect();
 
-    let content_dir = resolve_content_dir(automation_dir, repo_root)?;
-
-    // Collect all content files: filename → absolute path
-    let content_files: std::collections::HashSet<String> =
-        crate::content::locator::collect_markdown_files(&content_dir)
-            .into_iter()
-            .filter_map(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.to_string())
-            })
-            .collect();
-
-    let mut removed = Vec::new();
-    articles.retain(|article| {
-        let file_ref = article
-            .get("file")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
-        let basename = std::path::Path::new(file_ref)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-
-        if basename.is_empty() {
-            return true; // Keep malformed entries — they'll be flagged elsewhere
+    for article in articles {
+        if !proj_ids.contains(&article.id) {
+            lag.push(SyncIssue {
+                id: Some(article.id),
+                title: Some(article.title.clone()),
+                file: Some(article.file.clone()),
+                issue_type: "export_lag".into(),
+                detail: format!(
+                    "article id {} present in SQLite but missing from articles.json projection",
+                    article.id
+                ),
+            });
         }
-
-        if content_files.contains(basename) {
-            true // File exists — keep
-        } else {
-            let title = article
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("(untitled)");
-            removed.push(format!("{} ({})", title, file_ref));
-            false // File missing — remove
-        }
-    });
-
-    if !removed.is_empty() {
-        let out = serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n";
-        std::fs::write(&articles_path, out)
-            .map_err(|e| format!("Failed to write cleaned articles.json: {}", e))?;
     }
 
-    Ok(removed)
+    let mut proj_only: Vec<i64> = proj_ids
+        .into_iter()
+        .filter(|id| !db_ids.contains(id))
+        .collect();
+    proj_only.sort_unstable();
+    for id in proj_only {
+        lag.push(SyncIssue {
+            id: Some(id),
+            title: None,
+            file: None,
+            issue_type: "export_lag".into(),
+            detail: format!(
+                "article id {id} present in articles.json projection but missing from SQLite"
+            ),
+        });
+    }
+
+    lag
+}
+
+/// Parse article ids from `articles.json` projection. `None` if missing/unreadable.
+fn projection_article_ids(automation_dir: &Path) -> Option<HashSet<i64>> {
+    let path = automation_dir.join("articles.json");
+    if !path.exists() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&path).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let arr = doc.get("articles")?.as_array()?;
+    let mut ids = HashSet::new();
+    for a in arr {
+        if let Some(id) = a.get("id").and_then(|v| v.as_i64()) {
+            ids.insert(id);
+        }
+    }
+    Some(ids)
 }
 
 /// Resolve the content directory via the centralised `setup_check` module.
@@ -1315,50 +1319,6 @@ mod tests {
             .contains("File not found"));
     }
 
-    // ─── Regression: clean_stale_articles_json leaves SQLite stale ─────────────
-
-    #[test]
-    fn clean_stale_articles_json_removes_from_json_but_not_db() {
-        let dir = unique_temp_dir("ps_stale_cleanup");
-        let auto_dir = dir.join(".github").join("automation");
-        let content_dir = dir.join("content");
-        std::fs::create_dir_all(&content_dir).unwrap();
-
-        write_seo_workspace_json(&auto_dir, "content");
-        write_articles_json(
-            &auto_dir,
-            r#"{"nextArticleId":2,"articles":[{"id":1,"title":"Old","file":"./content/001_old.mdx","status":"draft"}]}"#,
-        );
-
-        let conn = in_memory_db();
-        setup_test_project(&conn, "p1", &dir);
-        insert_article(&conn, "p1", 1, "./content/001_old.mdx", "2026-01-01");
-
-        // No MDX file on disk → article is stale
-        let removed = clean_stale_articles_json(&auto_dir, &dir).unwrap();
-        assert_eq!(removed.len(), 1);
-
-        // JSON should no longer contain the stale article
-        let json_on_disk = std::fs::read_to_string(auto_dir.join("articles.json")).unwrap();
-        let doc: serde_json::Value = serde_json::from_str(&json_on_disk).unwrap();
-        assert!(doc["articles"].as_array().unwrap().is_empty());
-
-        // SQLite SHOULD also have the article removed (correct behavior),
-        // but currently it does NOT because clean_stale_articles_json only touches JSON.
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM articles WHERE project_id = 'p1'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        // This assertion documents the bug: the DB row is still present.
-        // When the bug is fixed, this test will need to be updated to expect 0.
-        assert_eq!(count, 1, "BUG: clean_stale_articles_json removed the article from JSON but left the SQLite row intact");
-    }
-
-    // ─── Regression: sync_and_validate patches MDX from stale JSON ─────────────
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // SSR Fallback / Orphaned Slug Detection
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1670,6 +1630,76 @@ fn collect_route_patterns(repo_root: &Path) -> Vec<RoutePattern> {
             result.next_action.contains("duplicate numeric prefixes"),
             "next_action should call out duplicates: {}",
             result.next_action
+        );
+    }
+
+    #[test]
+    fn sync_and_validate_reports_export_lag_for_db_only_article() {
+        let dir = unique_temp_dir("ps_export_lag");
+        let auto_dir = dir.join(".github").join("automation");
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        write_seo_workspace_json(&auto_dir, "content");
+        // Projection only knows about article 1; DB also has article 2.
+        write_articles_json(
+            &auto_dir,
+            r#"{"nextArticleId":3,"articles":[{"id":1,"title":"One","file":"./content/001_one.mdx","status":"draft"}]}"#,
+        );
+        write_mdx(&content_dir.join("001_one.mdx"), "One", "2026-01-01");
+        write_mdx(&content_dir.join("002_two.mdx"), "Two", "2026-01-02");
+
+        let conn = in_memory_db();
+        setup_test_project(&conn, "p1", &dir);
+        insert_article(&conn, "p1", 1, "./content/001_one.mdx", "2026-01-01");
+        // Override slug/title for id 2 (helper hardcodes test-article).
+        conn.execute(
+            "INSERT INTO articles (
+                id, title, url_slug, file, target_keyword, keyword_difficulty,
+                target_volume, published_date, word_count, status,
+                content_gaps_addressed, estimated_traffic_monthly, project_id
+            ) VALUES (2, 'Two', 'two', './content/002_two.mdx', NULL, NULL, 0, '2026-01-02', 100, 'draft', '[]', NULL, 'p1')",
+            [],
+        )
+        .unwrap();
+
+        let result = sync_and_validate(&auto_dir, &dir, false, &conn, "p1").unwrap();
+        assert!(
+            result.export_lag.iter().any(|i| {
+                i.issue_type == "export_lag" && i.id == Some(2)
+            }),
+            "expected export_lag for DB-only id 2, got {:?}",
+            result.export_lag
+        );
+        assert!(
+            result.next_action.contains("Re-export articles.json")
+                || result.next_action.contains("projection"),
+            "next_action should mention export lag: {}",
+            result.next_action
+        );
+    }
+
+    #[test]
+    fn sync_and_validate_export_lag_empty_when_projection_missing() {
+        let dir = unique_temp_dir("ps_export_lag_missing");
+        let auto_dir = dir.join(".github").join("automation");
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+        std::fs::create_dir_all(&auto_dir).unwrap();
+
+        write_seo_workspace_json(&auto_dir, "content");
+        // No articles.json — treat as never exported.
+        write_mdx(&content_dir.join("001_one.mdx"), "One", "2026-01-01");
+
+        let conn = in_memory_db();
+        setup_test_project(&conn, "p1", &dir);
+        insert_article(&conn, "p1", 1, "./content/001_one.mdx", "2026-01-01");
+
+        let result = sync_and_validate(&auto_dir, &dir, false, &conn, "p1").unwrap();
+        assert!(
+            result.export_lag.is_empty(),
+            "missing projection must not report lag: {:?}",
+            result.export_lag
         );
     }
 }

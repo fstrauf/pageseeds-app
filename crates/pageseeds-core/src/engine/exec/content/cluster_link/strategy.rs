@@ -236,10 +236,15 @@ pub(crate) fn exec_cluster_link_strategy(
 
     // Do not early-exit healthy when focus still needs at least one inbound link.
     if should_skip_strategy_as_healthy(compact_profiles.len(), focus_needs_inbound) {
+        // Producer stamps real wall-clock generated_at (issue #316).
+        let healthy_output = serde_json::json!({
+            "generated_at": chrono::Utc::now().to_rfc3339(),
+            "links_to_add": [],
+        });
         return crate::engine::workflows::StepResult {
             success: true,
             message: "No under-connected articles found — link graph is healthy".to_string(),
-            output: Some(r#"{"generated_at":"","links_to_add":[]}"#.to_string()),
+            output: Some(healthy_output.to_string()),
             artifact_key: None,
         };
     }
@@ -338,7 +343,6 @@ Return ONLY a valid JSON object — no markdown fences, no commentary.
 
 Output schema:
 {{
-  "generated_at": "<ISO-8601 timestamp>",
   "links_to_add": [
     {{
       "source_article_id": <number — the article whose MDX file will receive the new link>,
@@ -351,6 +355,7 @@ Output schema:
 }}
 
 Requirements:
+- Do NOT include generated_at — the producer stamps wall-clock time.
 - Maximum 20 entries in links_to_add.
 - Only suggest links that make genuine topical sense.
 - Each entry adds a link IN the source article TO the target article at URL /blog/<target_slug>.
@@ -428,10 +433,13 @@ Requirements:
 
     let mut links_json = crate::engine::text::extract_json(&raw_output).unwrap_or_else(|| {
         serde_json::json!({
-            "generated_at": chrono::Utc::now().to_rfc3339(),
             "links_to_add": [],
         })
     });
+
+    // Producer stamps wall-clock; never trust model-fabricated generated_at (#316).
+    links_json["generated_at"] =
+        serde_json::Value::String(chrono::Utc::now().to_rfc3339());
 
     // Deterministic post-filter: drop recommendations that are already present,
     // self-referential, or reference targets outside the index we sent.
@@ -577,6 +585,33 @@ mod tests {
         assert!(!should_skip_strategy_as_healthy(0, true));
         assert!(!should_skip_strategy_as_healthy(3, false));
         assert!(!should_skip_strategy_as_healthy(1, true));
+    }
+
+    #[test]
+    fn healthy_skip_output_stamps_nonempty_generated_at() {
+        // Mirrors the healthy-skip payload construction in exec_cluster_link_strategy.
+        let output = serde_json::json!({
+            "generated_at": chrono::Utc::now().to_rfc3339(),
+            "links_to_add": [],
+        });
+        let ga = output["generated_at"].as_str().unwrap();
+        assert!(!ga.is_empty(), "healthy skip must not use empty generated_at");
+        let parsed = chrono::DateTime::parse_from_rfc3339(ga).expect("rfc3339");
+        let age = chrono::Utc::now().signed_duration_since(parsed.with_timezone(&chrono::Utc));
+        assert!(age.num_seconds().abs() < 60);
+    }
+
+    #[test]
+    fn stamp_overwrites_model_generated_at_on_links_json() {
+        let mut links_json = serde_json::json!({
+            "generated_at": "2023-01-01T00:00:00Z",
+            "links_to_add": [],
+        });
+        links_json["generated_at"] =
+            serde_json::Value::String(chrono::Utc::now().to_rfc3339());
+        let ga = links_json["generated_at"].as_str().unwrap();
+        assert_ne!(ga, "2023-01-01T00:00:00Z");
+        assert!(!ga.is_empty());
     }
 
     #[test]

@@ -208,7 +208,9 @@ The content operations in `content/` assume this execution order. Skipping or re
 
 **Locate precedence:** config-aware resolution via `content::ops::resolve_content_dir` (`seo_workspace.json` `content_dir` → project override → heuristics). Publish-content (`publish_by_slugs`) uses the same resolver. Prefer `resolve_content_dir` / `content::locator` — do not re-implement candidate scanning.
 
-**Sync side effect:** `content::ops::sync_articles()` only writes `articles.json` if the sync is clean. A failed sync leaves the file unchanged.
+**Sync side effect:** `content_sync` re-exports `articles.json` via `article_index::export_projection` after a successful `sync_and_validate` (best-effort; warn on failure) so the projection cannot lag SQLite. `sync_and_validate` itself is read-only for the projection and reports `export_lag` when ids diverge.
+
+**Automation state `generated_at`:** On producer-written automation state files (`keyword_coverage.json`, `links_to_add.json`, etc.), `generated_at` is wall-clock stamped by the producer after agent extract — never trusted from model JSON.
 
 ---
 
