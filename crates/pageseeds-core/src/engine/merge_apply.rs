@@ -196,14 +196,32 @@ fn gitignore_pattern_covers_redirects(pattern: &str) -> bool {
     let p = p.strip_suffix("/**").unwrap_or(p);
     let p = p.trim_end_matches('/');
 
-    matches!(
+    if matches!(
         p,
         "redirects.csv"
             | ".github/automation/redirects.csv"
             | "automation/redirects.csv"
             | ".github/automation"
             | "automation"
-    )
+            | ".github"
+    ) {
+        return true;
+    }
+
+    // `.github/*` matches the automation dir (and thus redirects under it).
+    if p == ".github/*" {
+        return true;
+    }
+
+    // Bare extension glob without a slash: `*.csv` covers redirects.csv basename.
+    if p.starts_with("*.") && !p.contains('/') {
+        let ext = &p[1..]; // e.g. ".csv"
+        return "redirects.csv"
+            .to_ascii_lowercase()
+            .ends_with(&ext.to_ascii_lowercase());
+    }
+
+    false
 }
 
 // ─── Inbound link rewrite ────────────────────────────────────────────────────
@@ -412,6 +430,11 @@ mod tests {
         assert!(gitignore_pattern_covers_redirects(
             ".github/automation/redirects.csv"
         ));
+        assert!(gitignore_pattern_covers_redirects(".github"));
+        assert!(gitignore_pattern_covers_redirects(".github/"));
+        assert!(gitignore_pattern_covers_redirects(".github/*"));
+        assert!(gitignore_pattern_covers_redirects("*.csv"));
+        assert!(gitignore_pattern_covers_redirects("*.CSV"));
         assert!(!gitignore_pattern_covers_redirects("node_modules/"));
         assert!(!gitignore_pattern_covers_redirects("*.log"));
     }

@@ -172,7 +172,7 @@ Before opening operator or CLI PRs, run:
 pnpm test:cli
 ```
 
-That gate runs Rust tests (`test:rust`), the task-store lifecycle check (`check:task-store`), and the CLI machine-contract smoke (`check:cli-contract` → `scripts/check-cli-contract.sh`). `pnpm test:all` is an alias of `test:cli` (no frontend/Vite/IPC gates).
+That gate runs Rust tests (`test:rust` / pageseeds-core), `cargo test -p pageseeds-cli`, the task-store lifecycle check (`check:task-store`), and the CLI machine-contract smoke (`check:cli-contract` → `scripts/check-cli-contract.sh`). `pnpm test:all` is an alias of `test:cli` (no frontend/Vite/IPC gates).
 
 Machine contract details (stdout/stderr/exit codes): [CONTRACTS.md](../CONTRACTS.md) §14.
 

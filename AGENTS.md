@@ -20,7 +20,7 @@ Boot-time rules for coding agents. **Not** a product runbook or API catalog.
 | Project config | `.github/automation/project.yaml` (`ProjectConfig` — strategy + Reddit knobs SOT); `project.md` = prose/brand only |
 | LLM | `crates/pageseeds-core/src/rig/` (+ legacy `engine/agent.rs` fallback) |
 
-**Ship gate:** `pnpm test:cli` (alias `pnpm test:all`) = `cargo test -p pageseeds-core` → `check:task-store` → `check:cli-contract`. Also `cargo build -p pageseeds-cli` when the CLI surface changes. Install: `scripts/install-cli.sh` / [CLI_GETTING_STARTED](./docs/CLI_GETTING_STARTED.md).
+**Ship gate:** `pnpm test:cli` (alias `pnpm test:all`) = `test:rust` (`cargo test -p pageseeds-core`) → `cargo test -p pageseeds-cli` → `check:task-store` → `check:cli-contract`. Also `cargo build -p pageseeds-cli` when the CLI surface changes. Install: `scripts/install-cli.sh` / [CLI_GETTING_STARTED](./docs/CLI_GETTING_STARTED.md).
 
 ---
 
