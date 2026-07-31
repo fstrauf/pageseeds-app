@@ -250,12 +250,13 @@ desk (site-overview.striking_distance first; fallback filter only if needed)
   for “push rankings.”
 - Cite tool evidence (position, impressions, slug) in `-r` and the weekly report.
 
-### Measurement: two review types (do not conflate)
+### Measurement: review types (do not conflate)
 
 | Task type | Weekly policy |
 |-----------|----------------|
 | `ctr_outcome_review` | **Cancel / ignore** — deprecated measurement fan-out (#152). Not weekly backlog. |
 | `content_outcome_review` | **Mandatory when due** (≤1–2, after client-side `not_before` filter) — real closed-loop for write/fix/merge ships (#23; Path B spawn = #203). **Non-compliant only if** ≥1 due (post-filter) **and zero executed**. Due count >2: execute ≤1–2, report remainder as **deferred under cap** (still compliant). Explicit “none due” (post-filter) when zero rows pass the filter. |
+| `gsc_indexing_outcome_review` | **Mandatory when due** (≤1–2, same client-side `not_before` filter + cap pattern as `content_outcome_review`) — closed-loop for indexing fixes / IHC children. System-spawned; never create. **Non-compliant only if** ≥1 due (post-filter) **and zero executed**. See [Due `gsc_indexing_outcome_review`](#due-gsc_indexing_outcome_review). |
 
 **CTR closed-loop (no review-task fan-out):** measurement = **`gsc_page_daily`
 tape** + sparse **`ctr_outcomes`** change events when a CTR fix ships (Path B
@@ -269,8 +270,13 @@ up report). Also read `site-overview.outcomes` for stuck/pending counts. Do
 DataForSEO). See [Due `content_outcome_review`](#due-content_outcome_review)
 under soft path A.
 
-- **Never** `create-task content_outcome_review` (system spawn only; bare create
-  lacks `content_outcome_target`). **Never** add it to may-create.
+**Indexing closed-loop:** system-spawned `gsc_indexing_outcome_review` rows
+re-check whether a prior indexing fix moved the URL (indexed / still not
+indexed / deferred). Same measure-first gate as content outcomes — due rows
+must execute before inventing new soft work.
+
+- **Never** `create-task content_outcome_review` or `gsc_indexing_outcome_review`
+  (system spawn only). **Never** add either to may-create.
 - **Never** treat “measurement stubs” as “cancel all outcome reviews” — only
   `ctr_outcome_review` is cancel-or-ignore.
 
@@ -305,6 +311,7 @@ under soft path A.
 ```text
 Phase 0 spacing gate → load seo_program.yaml (mode + queues incl. optional prune)
   → due content_outcome_review (≤1–2; non-compliant only if due≥1 and zero executed; rest deferred under cap; “none due” if filter empty)
+  → due gsc_indexing_outcome_review (≤1–2; same cap / compliance pattern as content_outcome_review)
   → refresh ground truth (if stale) → site-overview
   → articles / article / gsc-queries
   → optional striking-distance filter (when pos 7–13 inventory looks high-ROI)
@@ -342,10 +349,12 @@ them. It sequences **mode + queues** so weekly runs do not freestyle every time.
 | `measure` | Mode D — Measure | Due outcome reviews + GSC movers + PostHog blog→signup; light creates only if critical |
 
 3. **Every week** still run measure as a **mandatory side-pass** when due
-   rows exist: due `content_outcome_review` ≤1–2 even when Mode is A/B/C.
-   **Non-compliant only if** ≥1 due (post-`not_before`) **and zero executed**.
-   When due >2, leftover rows are **deferred under cap** (still compliant).
-   “None due” after filter is fine.
+   rows exist: due `content_outcome_review` ≤1–2 **and** due
+   `gsc_indexing_outcome_review` ≤1–2 even when Mode is A/B/C (each type has
+   its own ≤1–2 cap; both count toward ≤15 exec). **Non-compliant only if** for
+   either type ≥1 due (post-`not_before`) **and zero executed**. When due >2 for
+   a type, leftover rows are **deferred under cap** (still compliant). “None
+   due” after filter is fine (state per type).
 4. **User override:** “research week” / “fix week” / explicit mode → honor user;
    note deviation from `current_mode` under Decisions.
 5. **Missing / unparseable file:** continue desk-default (research vs fix from
@@ -445,8 +454,8 @@ Breaking the gate (continuing mode work without override when age &lt; 5d)
 A pass is **measure-only** when it creates/executes **no growth actions**: no
 mode queue drain, no Path B write/fix/merge for growth, no research selection
 creates, no may-create growth tasks — only measurement (e.g. due
-`content_outcome_review`, `ctr-outcomes`, light desk reads) and optional
-report. Measure-only:
+`content_outcome_review`, due `gsc_indexing_outcome_review`, `ctr-outcomes`,
+light desk reads) and optional report. Measure-only:
 
 - Needs **no** override when the spacing gate would otherwise fire.
 - **Does not reset** the spacing clock. If you write a report, mark it
@@ -513,6 +522,36 @@ list-tasks -t content_outcome_review -s todo
 | Compliance | **Non-compliant only if** ≥1 due (post-`not_before`) **and zero executed**. Due >2: execute ≤1–2 (prefer high-impr / oldest / measuring-linked); remainder = **deferred under cap** (still compliant). “None due” must be explicit when the filter yields zero. |
 | On `regressed` / `insufficient_data` | Note in report; optional soft desk deep-dive later — **do not** auto-spawn fix fan-out from this alone |
 | Not required | DataForSEO, Clarity, Reddit, full `ctr_audit` / IHC, or `content_review` as strategy brain |
+
+#### Due `gsc_indexing_outcome_review`
+
+**Mandatory when due** (after client-side `not_before` filter) — close the
+measurement loop for prior indexing fixes before inventing new soft work.
+**Same cap / compliance pattern as** [`content_outcome_review`](#due-content_outcome_review):
+**non-compliant only if** ≥1 due row (post-filter) **and zero executed**. When
+due count >2: execute ≤1–2, report remaining as **deferred under cap** (still
+compliant). Zero due after filter is fine; state **“none due
+(`gsc_indexing_outcome_review`)”** explicitly. Prefer oldest due first.
+
+```text
+list-tasks -t gsc_indexing_outcome_review -s todo
+→ keep rows where not_before is null OR not_before ≤ now (ISO)
+→ select ≤1–2: prefer oldest due
+→ execute-task selected (counts toward ≤15 exec; NOT a create)
+→ get-task: read outcome report / indexing status artifacts
+→ ArtifactReview: summarize → update-task-status -s done
+→ report under "Movement since last run" (url + outcome_status)
+→ remaining due (beyond cap) → report as deferred under cap (compliant)
+```
+
+| Rule | Detail |
+|------|--------|
+| Cap | **≤1–2** executes per weekly run (own cap, not shared with `content_outcome_review`; still toward ≤15) |
+| Future `not_before` | **Do not** execute early — same gate as content outcomes |
+| Create | **Never** `create-task gsc_indexing_outcome_review`; never may-create |
+| Compliance | **Non-compliant only if** ≥1 due (post-`not_before`) **and zero executed**. Due >2: execute ≤1–2 (oldest first); remainder = **deferred under cap**. “None due” must be explicit when the filter yields zero. |
+| On `still_not_indexed` / deferred | Note in report; optional targeted desk follow-up later — **do not** auto-spawn full IHC from this alone |
+| Not required | DataForSEO, full `indexing_health_campaign`, or inventing index status without tool output |
 
 ### B. Refresh ground truth (if stale)
 
@@ -1167,12 +1206,13 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 - No product source edits. Missing tools → report gap.  
 - Max 5 creates / 15 executions / 3 new articles.  
 - **Due `content_outcome_review` mandatory when due** (≤1–2 exec toward ≤15; not creates; post-`not_before` filter). **Non-compliant only if** ≥1 due and zero executed; remainder beyond cap = **deferred under cap** (compliant). “None due” must be explicit. Never create these tasks. Path B write/merge/content-fix submit schedules them (#203). Report **Movement since last run** every week.  
+- **Due `gsc_indexing_outcome_review` mandatory when due** (≤1–2; same filter/cap/compliance pattern as content outcomes). System-spawned only; never create. Report indexing outcomes under **Movement since last run**.
 - Overview inventory fields (zero-impr / striking / hard-cannibal) are **never mandatory** actions; honor `degraded_reason` when tape is missing.  
 - Dead-weight scoring is **secondary / cache-first** (`--from-cache`); not default spine; no weekly re-score loop; no auto bulk noindex.  
 
 - Striking-distance (pos **7–13**, impr ≥ ~200): read `site-overview.striking_distance` first; optional soft prior → ≤**2** existing actions; no campaign type / DataForSEO / default full IHC or `ctr_audit`.  
 - Outcomes = **GSC windows** (`gsc_page_daily`), not live SERP / DataForSEO.  
-- `ctr_outcome_review` cancel/ignore; call `ctr-outcomes` for CTR measure; `content_outcome_review` mandatory when due — do not conflate.  
+- `ctr_outcome_review` cancel/ignore; call `ctr-outcomes` for CTR measure; `content_outcome_review` **and** `gsc_indexing_outcome_review` mandatory when due — do not conflate.
 - Low CTR → desk-selected `fix_content_article` (`-S`); not default full `ctr_audit`.  
 - Not-indexed → desk-selected `fix_indexing_internal_links` / `fix_content_article -S`; not default full `indexing_health_campaign`.  
 - Empty research shortlist → call `research-context` first (auto-refresh); `update_research_shortlist` only if force/fail. 
@@ -1196,17 +1236,18 @@ weekly spine. CLI weekly CTR: desk-ranked waste URLs → targeted fixes; full
 CLI weekly indexing: catalog-aware `not_indexed_sample` → targeted link/content
 fixes; full `indexing_health_campaign` is rare/scoped, not CLI default.
 
-**Closed-loop measurement (#209 / #203 / #301):** due system-spawned
-`content_outcome_review` is **mandatory when due** (post-`not_before` filter;
-≤1–2) early in the weekly path — GSC snapshot windows only. **Non-compliant
-only if** ≥1 due and zero executed; due beyond cap are **deferred under cap**
-(still compliant). Report under **Movement since last run** (including
-`measuring` queue read-back: deferred-under-cap measuring rows are noted, not
-flagged non-compliant). Nested success and Path B write/merge/content-fix
-submit both schedule these (+30d). Keep `ctr_outcome_review` cancel-or-ignore
-(#152). Overview inventory fields (zero-impression / striking-distance / hard
-cannibal, #204) are optional priors; never mandatory weekly actions; budgets
-≤5 / ≤15 / ≤3 unchanged.
+**Closed-loop measurement (#209 / #203 / #301 / coffee#90):** due system-spawned
+`content_outcome_review` **and** `gsc_indexing_outcome_review` are **mandatory
+when due** (post-`not_before` filter; ≤1–2 each) early in the weekly path —
+content compares GSC snapshot windows; indexing reviews re-check fix targets.
+**Non-compliant only if** for either type ≥1 due and zero executed; due beyond
+cap are **deferred under cap** (still compliant). Report under **Movement since
+last run** (including `measuring` queue read-back: deferred-under-cap measuring
+rows are noted, not flagged non-compliant). Nested success and Path B
+write/merge/content-fix submit both schedule content outcomes (+30d). Keep
+`ctr_outcome_review` cancel-or-ignore (#152). Overview inventory fields
+(zero-impression / striking-distance / hard cannibal, #204) are optional priors;
+never mandatory weekly actions; budgets ≤5 / ≤15 / ≤3 unchanged.
 
 **Striking-distance (#205):** preferred weekly path is skill-only —
 `site-overview.striking_distance` first (fallback `articles` /
