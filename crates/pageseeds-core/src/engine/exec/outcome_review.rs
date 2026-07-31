@@ -104,6 +104,81 @@ pub fn page_matches_slug(page_url: &str, slug: &str) -> bool {
     crate::content::slug::extract_slug_from_url(page_url) == normalized_slug
 }
 
+/// Conversion evidence status embedded in baseline/recent JSON (issue #308).
+///
+/// Evidence only — does **not** change GSC-led classification thresholds.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ConversionEvidence {
+    /// `"ok"` | `"insufficient_data"` | `"missing"`
+    pub status: &'static str,
+    pub days_with_data: i64,
+    pub events: std::collections::HashMap<String, f64>,
+}
+
+impl ConversionEvidence {
+    pub fn missing() -> Self {
+        Self {
+            status: "missing",
+            days_with_data: 0,
+            events: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn from_window(days_with_data: i64, events: std::collections::HashMap<String, f64>) -> Self {
+        let total: f64 = events.values().sum();
+        let status = if days_with_data == 0 || (total == 0.0 && days_with_data < MIN_RECENT_DAYS) {
+            if days_with_data == 0 {
+                "missing"
+            } else {
+                "insufficient_data"
+            }
+        } else if days_with_data < MIN_RECENT_DAYS {
+            "insufficient_data"
+        } else {
+            "ok"
+        };
+        Self {
+            status,
+            days_with_data,
+            events,
+        }
+    }
+}
+
+/// Aggregate PostHog conversion tape for pages matching `slug` over a window.
+///
+/// Uses the same `page_matches_slug` helper so pathnames like `/blog/foo`
+/// align with GSC page matching.
+pub fn conversion_window_for_slug(
+    conn: &Connection,
+    project_id: &str,
+    slug: &str,
+    start_date: &str,
+    end_date: &str,
+) -> ConversionEvidence {
+    let pages = match crate::posthog::db::list_pages(conn, project_id) {
+        Ok(p) => p,
+        Err(_) => return ConversionEvidence::missing(),
+    };
+    let matching: Vec<String> = pages
+        .into_iter()
+        .filter(|p| page_matches_slug(p, slug))
+        .collect();
+    if matching.is_empty() {
+        return ConversionEvidence::missing();
+    }
+    match crate::posthog::db::window_event_totals(
+        conn,
+        project_id,
+        &matching,
+        start_date,
+        end_date,
+    ) {
+        Ok((days, events)) => ConversionEvidence::from_window(days, events),
+        Err(_) => ConversionEvidence::missing(),
+    }
+}
+
 /// Compare pre/post snapshot windows for a review task's article and persist
 /// the classification. Output contract: JSON report with slug, page, window
 /// metrics, classification — persisted as the task's
@@ -214,10 +289,31 @@ pub(crate) fn exec_content_outcome_compare(
         classify_outcome(&baseline, &recent)
     };
 
+    // Conversion tape evidence (issue #308) — second dimension only; does not
+    // alter GSC-led classification above.
+    let baseline_start_s = baseline_start.format("%Y-%m-%d").to_string();
+    let baseline_end_s = baseline_end.format("%Y-%m-%d").to_string();
+    let recent_start_s = recent_start.format("%Y-%m-%d").to_string();
+    let recent_end_s = recent_end.format("%Y-%m-%d").to_string();
+    let conversion_baseline = conversion_window_for_slug(
+        conn,
+        &task.project_id,
+        &slug,
+        &baseline_start_s,
+        &baseline_end_s,
+    );
+    let conversion_recent = conversion_window_for_slug(
+        conn,
+        &task.project_id,
+        &slug,
+        &recent_start_s,
+        &recent_end_s,
+    );
+
     let reviewed_at = chrono::Utc::now().to_rfc3339();
     let baseline_json = serde_json::json!({
-        "window_start": baseline_start.format("%Y-%m-%d").to_string(),
-        "window_end": baseline_end.format("%Y-%m-%d").to_string(),
+        "window_start": baseline_start_s,
+        "window_end": baseline_end_s,
         "snapshot": baseline_window.map(|m| serde_json::json!({
             "days_with_data": m.days_with_data,
             "clicks": m.clicks,
@@ -225,10 +321,11 @@ pub(crate) fn exec_content_outcome_compare(
             "position": m.position,
         })),
         "spawn_artifact": artifact_baseline,
+        "conversion": conversion_baseline,
     });
     let recent_json = serde_json::json!({
-        "window_start": recent_start.format("%Y-%m-%d").to_string(),
-        "window_end": recent_end.format("%Y-%m-%d").to_string(),
+        "window_start": recent_start_s,
+        "window_end": recent_end_s,
         "days_with_data": recent_days,
         "snapshot": recent_window.map(|m| serde_json::json!({
             "days_with_data": m.days_with_data,
@@ -236,6 +333,7 @@ pub(crate) fn exec_content_outcome_compare(
             "impressions": m.impressions,
             "position": m.position,
         })),
+        "conversion": conversion_recent,
     });
 
     // 5. Persist to the queryable outcome history table. Best-effort: the
@@ -365,6 +463,101 @@ mod tests {
         assert!(page_matches_slug("https://example.com/blog/Foo_Bar", "foo-bar"));
         assert!(!page_matches_slug("https://example.com/blog/foobar", "foo"));
         assert!(!page_matches_slug("https://example.com/blog/foo", ""));
+        // PostHog pathnames are often bare paths without host.
+        assert!(page_matches_slug("/blog/foo", "foo"));
+        assert!(page_matches_slug("/foo", "foo"));
+    }
+
+    #[test]
+    fn conversion_evidence_missing_when_no_tape() {
+        let conn = in_memory_db();
+        let ev = conversion_window_for_slug(&conn, "proj1", "foo", "2026-01-01", "2026-01-31");
+        assert_eq!(ev.status, "missing");
+        assert_eq!(ev.days_with_data, 0);
+    }
+
+    #[test]
+    fn conversion_evidence_insufficient_when_thin() {
+        let conn = in_memory_db();
+        crate::posthog::db::insert_rows(
+            &conn,
+            "proj1",
+            &[crate::posthog::models::PosthogPageDailyRow {
+                page: "/blog/foo".into(),
+                event: "signup_started".into(),
+                date: "2026-07-01".into(),
+                count: 2.0,
+            }],
+        )
+        .unwrap();
+        let ev = conversion_window_for_slug(&conn, "proj1", "foo", "2026-07-01", "2026-07-31");
+        assert_eq!(ev.status, "insufficient_data");
+        assert_eq!(ev.days_with_data, 1);
+        assert_eq!(ev.events.get("signup_started").copied().unwrap_or(0.0), 2.0);
+    }
+
+    #[test]
+    fn conversion_evidence_ok_with_enough_days() {
+        let conn = in_memory_db();
+        let mut rows = Vec::new();
+        for i in 0..10i64 {
+            let d = chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap() + chrono::Duration::days(i);
+            rows.push(crate::posthog::models::PosthogPageDailyRow {
+                page: "/blog/foo".into(),
+                event: "signup_started".into(),
+                date: d.format("%Y-%m-%d").to_string(),
+                count: 1.0,
+            });
+        }
+        crate::posthog::db::insert_rows(&conn, "proj1", &rows).unwrap();
+        let ev = conversion_window_for_slug(&conn, "proj1", "foo", "2026-07-01", "2026-07-31");
+        assert_eq!(ev.status, "ok");
+        assert_eq!(ev.days_with_data, 10);
+        assert_eq!(ev.events.get("signup_started").copied().unwrap_or(0.0), 10.0);
+    }
+
+    #[test]
+    fn conversion_does_not_change_gsc_classification() {
+        // Even with conversion tape present, classification remains GSC-only.
+        let conn = in_memory_db();
+        let page = "https://example.com/blog/foo";
+        let anchor = chrono::Utc::now().date_naive() - chrono::Duration::days(30);
+        for i in 1..=28i64 {
+            let d = anchor - chrono::Duration::days(i);
+            insert_snapshot(&conn, page, &d.format("%Y-%m-%d").to_string(), 1.0, 10.0);
+        }
+        for i in 1..=28i64 {
+            let d = chrono::Utc::now().date_naive() - chrono::Duration::days(i);
+            insert_snapshot(&conn, page, &d.format("%Y-%m-%d").to_string(), 2.0, 20.0);
+            crate::posthog::db::insert_rows(
+                &conn,
+                "proj1",
+                &[crate::posthog::models::PosthogPageDailyRow {
+                    page: "/blog/foo".into(),
+                    event: "signup_started".into(),
+                    date: d.format("%Y-%m-%d").to_string(),
+                    count: 0.0, // zero conversions — must not veto improved
+                }],
+            )
+            .unwrap();
+        }
+        let task = make_review_task(
+            "proj1",
+            serde_json::json!({
+                "slug": "foo",
+                "parent_task_type": "fix_content_article",
+                "parent_task_id": "parent-1",
+                "anchor_date": anchor.format("%Y-%m-%dT00:00:00Z").to_string(),
+                "baseline": {"clicks": 28.0, "impressions": 280.0, "position": 10.0},
+            }),
+        );
+        let result = exec_content_outcome_compare(&task, "/tmp/test", &conn);
+        assert!(result.success, "step failed: {}", result.message);
+        let report: serde_json::Value =
+            serde_json::from_str(result.output.as_deref().unwrap()).unwrap();
+        assert_eq!(report["classification"], "improved");
+        assert!(report["baseline_window"]["conversion"].is_object());
+        assert!(report["recent_window"]["conversion"].is_object());
     }
 
     fn make_review_task(project_id: &str, target: serde_json::Value) -> Task {

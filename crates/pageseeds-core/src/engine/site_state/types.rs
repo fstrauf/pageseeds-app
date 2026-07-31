@@ -36,6 +36,9 @@ pub const DECLINING_IMPRESSIONS_DROP_PCT: f64 = 0.40;
 /// redirect-equity, non-catalog GSC, and declining-pages inventory groups.
 pub const OVERVIEW_INVENTORY_SAMPLE_CAP: usize = 10;
 
+/// Cap on conversion top-pages sample in site-overview (issue #308).
+pub const CONVERSION_TOP_PAGES_CAP: usize = 20;
+
 /// Minimum recent-window impressions for non-catalog residual GSC inventory (#261).
 pub const NON_CATALOG_GSC_MIN_IMPRESSIONS: f64 = 50.0;
 
@@ -64,8 +67,38 @@ pub struct SiteOverview {
     pub declining_pages: DecliningPagesInventory,
     /// Closed-loop outcome aggregates from content + CTR tables (#302).
     pub outcomes: OutcomesInventory,
+    /// Optional PostHog conversion tape rollup (issue #308). Always present;
+    /// empty-safe when tape is missing/stale (`source: "none"`).
+    pub conversion: ConversionOverview,
     /// Deterministic flag strings only (no soft-cluster prose).
     pub hints: Vec<String>,
+}
+
+/// Site-wide conversion tape summary for desk (issue #308).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ConversionOverview {
+    pub freshness: ConversionFreshness,
+    /// Window length in days used for `top_pages` totals (typically 28).
+    pub window_days: i64,
+    /// Top pages by total conversion events in the window (capped sample).
+    pub top_pages: Vec<ConversionPageSample>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ConversionFreshness {
+    /// Newest `posthog_page_daily.fetched_at`, if any.
+    pub latest_fetched_at: Option<String>,
+    /// Whole days since [`Self::latest_fetched_at`], or null when none.
+    pub age_days: Option<i64>,
+    /// `"posthog_page_daily"` when any rows exist, else `"none"`.
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversionPageSample {
+    pub page: String,
+    pub total: f64,
+    pub events: std::collections::HashMap<String, f64>,
 }
 
 /// Desk rollup of measured content/CTR outcomes (issue #302).

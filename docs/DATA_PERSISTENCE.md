@@ -335,6 +335,26 @@ Project configuration.
 }
 ```
 
+### posthog_page_daily (SQLite) + posthog_collection.json
+
+**Engine conversion tape** (issue #308). System task `collect_posthog` queries the
+PostHog HogQL API for configured conversion events (defaults: `signup_started`,
+`signup_completed`, `cta_clicked`) over the last 28 days, grouped by day +
+`$pathname`.
+
+| Store | Role |
+|-------|------|
+| `posthog_page_daily` | Append-only SQLite tape (`UNIQUE(project_id, page, event, date)`); INSERT OR IGNORE; ~90d prune |
+| `posthog_collection.json` | Sidecar artifact under `.github/automation/` (meta + rows) |
+
+Config: `project.yaml` → `posthog_project_id` (required) + optional
+`posthog_conversion_events`. Secret: `POSTHOG_API_KEY` via EnvResolver. Optional
+`POSTHOG_HOST` (default `us.posthog.com`; strip scheme for EU).
+
+Consumers: `content_outcome_review` embeds conversion windows as evidence only
+(does not veto GSC classification); `site-overview.conversion` is empty-safe when
+tape is missing.
+
 ### gsc_collection.json
 
 URL Inspection API results.
@@ -455,6 +475,7 @@ per-fix review tasks.
 | Layer | Store | Role |
 |-------|--------|------|
 | **Daily tape** | `gsc_page_daily` (append-only) | Per-page GSC series; 28-day windows for baseline/after metrics |
+| **Conversion tape** | `posthog_page_daily` (append-only, issue #308) | Per-page × event × day conversion counts via `collect_posthog`; evidence for `content_outcome_review` + `site-overview.conversion` |
 | **Change events** | `ctr_outcomes` | Sparse rows when a CTR fix ships (nested `fix_ctr_article` or Path B `fix-submit` kind=ctr) |
 
 - Re-ship for the same article **supersedes** prior open/pending events.

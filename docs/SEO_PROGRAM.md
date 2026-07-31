@@ -97,7 +97,7 @@ notes: optional freeform (short)
 | **attract** | Primary backlog → `research-pull -K` / Path B write / publish / cluster | ≤2–3 new articles |
 | **harvest** | Desk + harvest_queue → Path B fix (CTA / intro / links to product_paths) | ≤5 fixes |
 | **tools** | tools_queue commercial / calculator / screener pages | ≤2–3 |
-| **measure** | Due `content_outcome_review` + GSC movers + PostHog blog→signup | ≤1–2 reviews; light creates only if critical |
+| **measure** | Due `content_outcome_review` + GSC movers + PostHog blog→signup (engine conversion tape `posthog_page_daily` when `collect_posthog` has run; weekly skill MCP desk remains for live ranking) | ≤1–2 reviews; light creates only if critical |
 
 **Every week** still runs measure as a **mandatory side-pass when due** (≤1–2
 due outcome reviews, post-`not_before` filter) even when `current_mode` is

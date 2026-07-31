@@ -31,6 +31,11 @@ pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 /// Filename under the automation directory.
 pub const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
+/// Default conversion events for the PostHog engine tape (issue #308).
+fn default_posthog_conversion_events() -> Vec<String> {
+    crate::posthog::models::default_posthog_conversion_events()
+}
+
 /// `{automation_dir}/project.yaml`
 pub fn project_config_path(automation_dir: &Path) -> PathBuf {
     automation_dir.join(PROJECT_CONFIG_FILE)
@@ -47,10 +52,16 @@ pub struct ProjectConfig {
     pub schema_version: u32,
     #[serde(default)]
     pub product_name: Option<String>,
-    /// PostHog project id for weekly SEO behavioral desk (MCP `switch-project`).
-    /// Numeric id as string (e.g. `"131482"`). Sole config path — no skill fallbacks.
+    /// PostHog project id for weekly SEO behavioral desk (MCP `switch-project`)
+    /// and the engine conversion tape (`collect_posthog`). Numeric id as string
+    /// (e.g. `"131482"`). Sole config path — no skill fallbacks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub posthog_project_id: Option<String>,
+    /// Conversion event names collected into `posthog_page_daily` (issue #308).
+    /// Serde default when the key is missing. An explicit empty list falls back
+    /// to defaults at collect time via [`crate::posthog::resolve_conversion_events`].
+    #[serde(default = "default_posthog_conversion_events")]
+    pub posthog_conversion_events: Vec<String>,
     #[serde(default)]
     pub search_keywords: SearchKeywords,
     #[serde(default)]
@@ -65,6 +76,7 @@ impl Default for ProjectConfig {
             schema_version: SUPPORTED_SCHEMA_VERSION,
             product_name: None,
             posthog_project_id: None,
+            posthog_conversion_events: default_posthog_conversion_events(),
             search_keywords: SearchKeywords::default(),
             clusters: Vec::new(),
             reddit: ProjectRedditConfig::default(),
@@ -243,6 +255,7 @@ impl ProjectConfig {
             schema_version: SUPPORTED_SCHEMA_VERSION,
             product_name: None,
             posthog_project_id: None,
+            posthog_conversion_events: default_posthog_conversion_events(),
             search_keywords: SearchKeywords::from(strategy),
             clusters: strategy.clusters.clone(),
             reddit: ProjectRedditConfig::default(),
@@ -301,6 +314,7 @@ mod tests {
             schema_version: 1,
             product_name: Some("PageSeeds".into()),
             posthog_project_id: Some("131482".into()),
+            posthog_conversion_events: default_posthog_conversion_events(),
             search_keywords: SearchKeywords {
                 primary: vec!["seo automation".into()],
                 problem: vec!["manual seo workflows".into()],
@@ -362,6 +376,10 @@ mod tests {
         assert_eq!(original.schema_version, SUPPORTED_SCHEMA_VERSION);
         assert_eq!(original.product_name, None);
         assert_eq!(original.posthog_project_id, None);
+        assert_eq!(
+            original.posthog_conversion_events,
+            default_posthog_conversion_events()
+        );
         assert!(original.search_keywords.primary.is_empty());
         assert!(original.clusters.is_empty());
         assert_eq!(original.reddit.mention_stance, MentionStance::Optional);
@@ -388,12 +406,64 @@ search_keywords:
         std::fs::write(&path, yaml).unwrap();
         let loaded = load_project_config(&path).unwrap();
         assert_eq!(loaded.posthog_project_id.as_deref(), Some("131482"));
+        // Missing key → serde default conversion events.
+        assert_eq!(
+            loaded.posthog_conversion_events,
+            default_posthog_conversion_events()
+        );
 
         save_project_config(&path, &loaded).unwrap();
         let reloaded = load_project_config(&path).unwrap();
         assert_eq!(reloaded.posthog_project_id.as_deref(), Some("131482"));
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains("posthog_project_id"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn posthog_conversion_events_round_trips() {
+        let dir = temp_dir("posthog_events");
+        let path = project_config_path(&dir);
+        let yaml = "\
+schema_version: 1
+posthog_project_id: \"131482\"
+posthog_conversion_events:
+  - purchase
+  - trial_started
+search_keywords:
+  primary: []
+";
+        std::fs::write(&path, yaml).unwrap();
+        let loaded = load_project_config(&path).unwrap();
+        assert_eq!(
+            loaded.posthog_conversion_events,
+            vec!["purchase".to_string(), "trial_started".to_string()]
+        );
+
+        save_project_config(&path, &loaded).unwrap();
+        let reloaded = load_project_config(&path).unwrap();
+        assert_eq!(reloaded.posthog_conversion_events, loaded.posthog_conversion_events);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn posthog_conversion_events_empty_list_loads_empty_collect_falls_back() {
+        // Explicit empty list deserializes as empty; collect-time resolve fills defaults.
+        let dir = temp_dir("posthog_events_empty");
+        let path = project_config_path(&dir);
+        let yaml = "\
+schema_version: 1
+posthog_conversion_events: []
+search_keywords:
+  primary: []
+";
+        std::fs::write(&path, yaml).unwrap();
+        let loaded = load_project_config(&path).unwrap();
+        assert!(loaded.posthog_conversion_events.is_empty());
+        let resolved = crate::posthog::resolve_conversion_events(&loaded.posthog_conversion_events);
+        assert_eq!(resolved, default_posthog_conversion_events());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

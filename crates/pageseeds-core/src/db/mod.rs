@@ -1544,6 +1544,15 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 52 {
+        // PostHog conversion tape (issue #308) — page × event × day counts.
+        conn.execute_batch(MIGRATION_V52)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (52, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -1707,6 +1716,24 @@ static MIGRATION_V51: &str = r#"
 -- cluster name + status; NULL when no cluster matches or no strategy exists.
 ALTER TABLE research_shortlist ADD COLUMN strategy_cluster TEXT;
 ALTER TABLE research_shortlist ADD COLUMN strategy_status TEXT;
+"#;
+
+static MIGRATION_V52: &str = r#"
+-- PostHog conversion tape (issue #308). Append-only page × event × day counts.
+-- North-star conversion evidence for content_outcome_review + site-overview.
+CREATE TABLE IF NOT EXISTS posthog_page_daily (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    page TEXT NOT NULL,
+    event TEXT NOT NULL,
+    date TEXT NOT NULL,
+    count REAL NOT NULL DEFAULT 0,
+    fetched_at TEXT NOT NULL,
+    UNIQUE(project_id, page, event, date),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_posthog_page_daily_project_page_event_date
+    ON posthog_page_daily(project_id, page, event, date);
 "#;
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -164,6 +164,26 @@ Article → short-form vertical video ([video clip spec](./video_clip_spec.md)).
 | **When** | You want on-page UX/behavioral signals (rage clicks, dead clicks, scroll depth) layered onto content decisions. |
 | **After completion** | `ArtifactReview` only — surfaces findings, does not spawn work (`None`). |
 
+### Collection — keep desk tapes fresh
+
+| Field | `collect_gsc` |
+|---|---|
+| **Does** | Syncs Google Search Console page-daily + URL inspection into SQLite desk tape (`gsc_page_daily`) and automation artifacts. |
+| **When** | Auto-enqueued on a schedule; weekly path may create+execute when desk tape is stale. |
+| **After completion** | No review surface, no follow-ups (`None`). |
+
+| Field | `collect_clarity` |
+|---|---|
+| **Does** | Pulls Microsoft Clarity Export API metrics into SQLite + `clarity_collection.json`. |
+| **When** | Auto-enqueued when Clarity is configured (`clarity_project_id` + `CLARITY_API_TOKEN`). |
+| **After completion** | No review surface, no follow-ups (`None`). |
+
+| Field | `collect_posthog` |
+|---|---|
+| **Does** | Pulls PostHog conversion events (HogQL Query API) into the engine conversion tape `posthog_page_daily` + `posthog_collection.json`. Deterministic — no LLM. Requires `project.yaml` → `posthog_project_id` and `POSTHOG_API_KEY`. Fail closed if either is missing (never success-without-fetch). |
+| **When** | Auto-enqueued on a schedule (24h). Events from `posthog_conversion_events` (defaults: `signup_started`, `signup_completed`, `cta_clicked`). Empty explicit list falls back to defaults at collect time. |
+| **After completion** | No review surface, no follow-ups (`None`). Consumers: `content_outcome_review` (conversion evidence on baseline/recent windows) and `site-overview.conversion`. Not a weekly skill MCP substitute — skill desk stays MCP for live behavioral ranking. |
+
 ### Off-site engagement
 
 Reddit only. For link-building / outreach / rank trackers, see [Non-goals / not in product](#non-goals--not-in-product).
@@ -180,7 +200,7 @@ Product boundaries for agents and operators (epic [#202](https://github.com/fstr
 
 | Non-goal | Truth in product |
 |---|---|
-| **Outcomes** | **GSC** owns post-ship outcomes (`gsc_page_daily`, desk tools: `site-overview` / `articles` / `gsc-*` / `ctr-outcomes`). Content closed-loop = system `content_outcome_review`; CTR closed-loop = free `ctr-outcomes` CLI (no task fan-out). Not paid position APIs. |
+| **Outcomes** | **GSC** owns post-ship demand outcomes (`gsc_page_daily`, desk tools: `site-overview` / `articles` / `gsc-*` / `ctr-outcomes`). Content closed-loop = system `content_outcome_review` (GSC windows + optional PostHog conversion evidence from `posthog_page_daily` when `collect_posthog` has run). CTR closed-loop = free `ctr-outcomes` CLI (no task fan-out). Not paid position APIs. |
 | **SERP / DataForSEO** | Research, winnability, optional diagnostics only — cost-capped (`serp_guard`). **Never** weekly outcome ground truth. |
 | **Link building / outreach / competitor backlink acquisition** | Human/PR process **outside** the product. No task type. Do not invent weekly hard actions for it. Only automated off-site path is Reddit (`reddit_opportunity_search`) when configured. |
 | **Continuous competitive rank tracker** (Accuranker-class) | **Not** in product and **not** planned in epic #202. |
@@ -221,6 +241,9 @@ Product boundaries for agents and operators (epic [#202](https://github.com/fstr
 | `cannibalization_audit` | AutoEnqueue | CannibalizationPicker | UserSelection |
 | `indexing_health_campaign` | UserEnqueue | ArtifactReview | BackendAuto |
 | `clarity_analytics` | UserEnqueue | ArtifactReview | None |
+| `collect_gsc` | AutoEnqueue | None | None |
+| `collect_clarity` | AutoEnqueue | None | None |
+| `collect_posthog` | AutoEnqueue | None | None |
 | `reddit_opportunity_search` | AutoEnqueue | RedditPicker | UserSelection |
 | `content_cleanup` | UserEnqueue | None | None |
 | `sanitize_content` | UserEnqueue | None | None |

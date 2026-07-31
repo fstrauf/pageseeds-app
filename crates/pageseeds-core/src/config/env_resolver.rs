@@ -31,6 +31,10 @@ pub const REQUIRED_SECRETS: &[(&str, &str)] = &[
     ("REDDIT_CLIENT_SECRET", "Reddit API"),
     ("REDDIT_REFRESH_TOKEN", "Reddit API (posting)"),
     ("CLARITY_API_TOKEN", "Microsoft Clarity Data Export API"),
+    (
+        "POSTHOG_API_KEY",
+        "PostHog personal API key (conversion tape)",
+    ),
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
