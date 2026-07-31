@@ -1,6 +1,7 @@
 /// Autonomous batch processing — executes all ready automatic/batchable tasks.
 ///
 /// Mirrors Python `dashboard_ptk/dashboard/batch.py`.
+use chrono::Utc;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
@@ -62,7 +63,8 @@ fn is_autonomous(task: &Task) -> bool {
 
 // ─── Ready task selection ─────────────────────────────────────────────────────
 
-/// Returns tasks that are todo, autonomous, and have all dependencies done.
+/// Returns tasks that are todo, autonomous, due (`not_before`), and have all
+/// dependencies done. Scheduler/batch never picks a not-due task.
 pub fn get_ready_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>, String> {
     // Use list_tasks_light to avoid loading large artifact blobs into memory
     // when we only need status, type, and dependency info.
@@ -73,12 +75,14 @@ pub fn get_ready_tasks(conn: &Connection, project_id: &str) -> Result<Vec<Task>,
         .map(|t| t.id.clone())
         .collect();
 
+    let now = Utc::now();
     let mut ready: Vec<Task> = all_tasks
         .into_iter()
         .filter(|t| {
             t.status == TaskStatus::Todo
                 && is_autonomous(t)
                 && t.depends_on.iter().all(|dep| done_ids.contains(dep))
+                && executor::task_is_due(t, now)
         })
         .collect();
 
@@ -139,7 +143,7 @@ pub async fn run_batch_with_token(
 
         log::info!("[batch] executing task {task_id} ({task_type})");
 
-        match executor::execute_task_with_token(conn, &task_id, gsc_token, false).await {
+        match executor::execute_task_with_token(conn, &task_id, gsc_token, false, false).await {
             Ok(exec_result) => {
                 let batch_task_result = BatchTaskResult {
                     task_id: task_id.clone(),
@@ -199,4 +203,95 @@ pub async fn run_batch_with_token(
         results,
         duration_ms: started.elapsed().as_millis() as u64,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::task::{
+        AgentPolicy, FollowUpPolicy, Priority, Task, TaskReviewSurface, TaskRun, TaskRunPolicy,
+        TaskStatus,
+    };
+
+    fn in_memory_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                path TEXT NOT NULL, content_dir TEXT, site_url TEXT,
+                site_id TEXT, sitemap_url TEXT,
+                project_mode TEXT NOT NULL DEFAULT 'workspace',
+                active INTEGER NOT NULL DEFAULT 1,
+                agent_provider TEXT, seo_provider TEXT, clarity_project_id TEXT
+             );
+             CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY, type TEXT NOT NULL, phase TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'todo',
+                priority TEXT NOT NULL DEFAULT 'medium',
+                run_policy TEXT NOT NULL DEFAULT 'user_enqueue',
+                review_surface TEXT NOT NULL DEFAULT 'none',
+                follow_up_policy TEXT NOT NULL DEFAULT 'none',
+                agent_policy TEXT NOT NULL DEFAULT 'none',
+                title TEXT, description TEXT,
+                project_id TEXT NOT NULL,
+                depends_on TEXT NOT NULL DEFAULT '[]',
+                artifacts TEXT NOT NULL DEFAULT '[]',
+                run_attempts INTEGER NOT NULL DEFAULT 0,
+                run_last_error TEXT, run_provider TEXT,
+                not_before TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active) VALUES ('proj1', 'Test', '/tmp', 1)",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn make_auto_task(id: &str, not_before: Option<String>) -> Task {
+        let now = chrono::Utc::now().to_rfc3339();
+        Task {
+            id: id.to_string(),
+            task_type: "collect_gsc".to_string(),
+            phase: "collection".to_string(),
+            status: TaskStatus::Todo,
+            priority: Priority::Medium,
+            run_policy: TaskRunPolicy::AutoEnqueue,
+            review_surface: TaskReviewSurface::None,
+            follow_up_policy: FollowUpPolicy::None,
+            agent_policy: AgentPolicy::None,
+            title: Some(id.to_string()),
+            description: None,
+            project_id: "proj1".to_string(),
+            depends_on: vec![],
+            artifacts: vec![],
+            run: TaskRun::default(),
+            created_at: now.clone(),
+            updated_at: now,
+            not_before,
+        }
+    }
+
+    #[test]
+    fn get_ready_tasks_excludes_future_not_before() {
+        let conn = in_memory_db();
+        let future = (chrono::Utc::now() + chrono::Duration::days(14)).to_rfc3339();
+        let past = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+
+        task_store::create_task(&conn, &make_auto_task("due-null", None)).unwrap();
+        task_store::create_task(&conn, &make_auto_task("due-past", Some(past))).unwrap();
+        task_store::create_task(&conn, &make_auto_task("not-due", Some(future))).unwrap();
+
+        let ready = get_ready_tasks(&conn, "proj1").unwrap();
+        let ids: Vec<&str> = ready.iter().map(|t| t.id.as_str()).collect();
+        assert!(ids.contains(&"due-null"), "null not_before should be ready: {ids:?}");
+        assert!(ids.contains(&"due-past"), "past not_before should be ready: {ids:?}");
+        assert!(
+            !ids.contains(&"not-due"),
+            "future not_before must be excluded: {ids:?}"
+        );
+    }
 }

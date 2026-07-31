@@ -472,10 +472,14 @@ fn cancel_tasks(db_path: &str, project_id: &str, args: &[String]) -> Result<serd
 
 fn execute_task(db_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
     let task_id = flag(args, "--task-id", "-I").unwrap_or_else(|| exit("--task-id required"));
+    let force = has_flag(args, "--force", "");
     let conn = open_db(db_path)?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let result = rt.block_on(async {
-        pageseeds_core::engine::executor::execute_task_with_token(&conn, &task_id, None, false).await
+        pageseeds_core::engine::executor::execute_task_with_token(
+            &conn, &task_id, None, false, force,
+        )
+        .await
     })?;
     Ok(serde_json::json!({
         "task_id": task_id,
@@ -1132,6 +1136,31 @@ fn ctr_health(project_id: &str, project_path: &str, db_path: &str) -> Result<ser
     Ok(serde_json::to_value(summary).unwrap_or_default())
 }
 
+/// Build create-task success JSON, optionally including off-mode `warning`.
+fn create_task_success_json(
+    project_path: &str,
+    task_id: &str,
+    task_type: &str,
+    title: impl serde::Serialize,
+    status: impl serde::Serialize,
+) -> serde_json::Value {
+    let mut v = serde_json::json!({
+        "task_id": task_id,
+        "task_type": task_type,
+        "title": title,
+        "status": status,
+    });
+    if let Some(warning) = pageseeds_core::models::seo_program::off_mode_create_warning(
+        std::path::Path::new(project_path),
+        task_type,
+    ) {
+        v.as_object_mut()
+            .expect("object")
+            .insert("warning".into(), serde_json::Value::String(warning));
+    }
+    v
+}
+
 fn create_task(
     project_id: &str,
     db_path: &str,
@@ -1172,12 +1201,13 @@ fn create_task(
             },
         )
         .map_err(|e| e.to_string())?;
-        return Ok(serde_json::json!({
-            "task_id": task.id,
-            "task_type": tt,
-            "title": task.title,
-            "status": task.status,
-        }));
+        return Ok(create_task_success_json(
+            project_path,
+            &task.id,
+            &tt,
+            task.title,
+            task.status,
+        ));
     }
 
     // fix_ctr_article always attaches a single-article ctr_context (GSC + file
@@ -1205,12 +1235,13 @@ fn create_task(
             },
         )
         .map_err(|e| e.to_string())?;
-        return Ok(serde_json::json!({
-            "task_id": task.id,
-            "task_type": tt,
-            "title": task.title,
-            "status": task.status,
-        }));
+        return Ok(create_task_success_json(
+            project_path,
+            &task.id,
+            &tt,
+            task.title,
+            task.status,
+        ));
     }
 
     // fix_indexing_internal_links always attaches indexing_link_target (IHC child
@@ -1237,12 +1268,13 @@ fn create_task(
             },
         )
         .map_err(|e| e.to_string())?;
-        return Ok(serde_json::json!({
-            "task_id": task.id,
-            "task_type": tt,
-            "title": task.title,
-            "status": task.status,
-        }));
+        return Ok(create_task_success_json(
+            project_path,
+            &task.id,
+            &tt,
+            task.title,
+            task.status,
+        ));
     }
 
     let task = pageseeds_core::engine::spawner::TaskSpawner::spawn(&conn, pageseeds_core::engine::spawner::TaskSpec {
@@ -1252,7 +1284,13 @@ fn create_task(
         run_policy: if auto_enqueue { Some(TaskRunPolicy::AutoEnqueue) } else { None },
         ..Default::default()
     }).map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({"task_id": task.id, "task_type": tt, "title": title, "status": task.status}))
+    Ok(create_task_success_json(
+        project_path,
+        &task.id,
+        &tt,
+        title,
+        task.status,
+    ))
 }
 
 fn write_spec(project_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
@@ -1715,8 +1753,8 @@ const TOOLS: &[ToolHelp] = &[
     },
     ToolHelp {
         name: "execute-task",
-        purpose: "Run one task by id (nested agent host)",
-        example: "execute-task -I <task-id>",
+        purpose: "Run one task by id; --force overrides not_before gate",
+        example: "execute-task -I <task-id> [--force]",
         section: "Task / queue",
     },
     ToolHelp {

@@ -4,6 +4,27 @@ This file documents runtime contracts, invariants, and hidden rules that are NOT
 
 ---
 
+## 0. `not_before` delayed-execution gate
+
+Tasks may carry an optional RFC3339 `not_before` timestamp (e.g. +14d/+30d
+outcome reviews). Until that time the task must not run automatically.
+
+**Enforced at two layers** (issue #307):
+
+1. **Queue lease filter** — `engine/queue.rs` `get_next_pending_item` only
+   leases rows where `not_before IS NULL OR not_before <= now`.
+2. **Executor root** — `execute_task_with_token(..., force)` refuses execution
+   when `not_before` parses as strictly after `Utc::now()` and `force == false`.
+   Error message includes the due timestamp and points at `--force`. Batch
+   `get_ready_tasks` applies the same due check in-memory so the scheduler
+   never picks a not-due task. Shared helper: `executor::task_is_due`.
+
+Unparseable / missing `not_before` is treated as due (fail open). CLI
+`execute-task --force` is the only intentional override path; batch/queue
+always pass `force: false`.
+
+---
+
 ## 1. Task Status Values
 
 **Canonical set** (defined in `config/mod.rs::STATUSES`):

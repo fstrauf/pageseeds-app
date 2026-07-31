@@ -981,3 +981,98 @@
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    // ─── not_before gate (issue #307) ─────────────────────────────────────────
+
+    #[test]
+    fn task_is_due_null_not_before() {
+        let task = make_task("collect_gsc", "proj1");
+        assert!(task_is_due(&task, chrono::Utc::now()));
+    }
+
+    #[test]
+    fn task_is_due_past_not_before() {
+        let mut task = make_task("collect_gsc", "proj1");
+        task.not_before = Some((chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339());
+        assert!(task_is_due(&task, chrono::Utc::now()));
+    }
+
+    #[test]
+    fn task_is_due_future_not_before() {
+        let mut task = make_task("collect_gsc", "proj1");
+        task.not_before = Some((chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339());
+        assert!(!task_is_due(&task, chrono::Utc::now()));
+    }
+
+    #[test]
+    fn task_is_due_unparseable_fails_open() {
+        let mut task = make_task("collect_gsc", "proj1");
+        task.not_before = Some("not-a-timestamp".to_string());
+        assert!(task_is_due(&task, chrono::Utc::now()));
+    }
+
+    #[tokio::test]
+    async fn execute_blocks_future_not_before_without_force() {
+        let conn = in_memory_db();
+        let proj = test_project_in(&conn);
+        let mut task = make_task("collect_gsc", &proj);
+        let not_before = (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+        task.not_before = Some(not_before.clone());
+        let task_id = task.id.clone();
+        task_store::create_task(&conn, &task).unwrap();
+
+        let err = execute_task_with_token(&conn, &task_id, None, false, false)
+            .await
+            .expect_err("should refuse not-due task");
+        assert!(
+            err.contains("not due") || err.contains("not_before"),
+            "error should mention not due / not_before, got: {err}"
+        );
+        assert!(
+            err.contains(&not_before) || err.contains("--force"),
+            "error should include timestamp or --force hint, got: {err}"
+        );
+
+        // Task must still be todo (never transitioned to in_progress).
+        let saved = task_store::get_task(&conn, &task_id).unwrap();
+        assert_eq!(saved.status, TaskStatus::Todo);
+    }
+
+    #[tokio::test]
+    async fn execute_force_bypasses_not_before_gate() {
+        let conn = in_memory_db();
+        let proj = test_project_in(&conn);
+        let mut task = make_task("collect_gsc", &proj);
+        task.not_before = Some((chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339());
+        let task_id = task.id.clone();
+        task_store::create_task(&conn, &task).unwrap();
+
+        // force=true must pass the gate; may fail later for missing secrets/handler
+        // side effects — only assert the gate did not return the not_before Err.
+        let result = execute_task_with_token(&conn, &task_id, None, true, true).await;
+        match result {
+            Ok(_) => {} // dry_run with force proceeds
+            Err(e) => {
+                assert!(
+                    !e.contains("not due") && !e.contains("not_before"),
+                    "force should bypass not_before gate, got: {e}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_null_not_before_proceeds() {
+        let conn = in_memory_db();
+        let proj = test_project_in(&conn);
+        let task = make_task("collect_gsc", &proj);
+        let task_id = task.id.clone();
+        task_store::create_task(&conn, &task).unwrap();
+
+        // dry_run so we don't need GSC credentials; gate still applies.
+        let result = execute_task_with_token(&conn, &task_id, None, true, false)
+            .await
+            .expect("null not_before should proceed");
+        assert!(result.success, "dry-run should succeed: {}", result.message);
+    }
+

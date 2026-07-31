@@ -486,9 +486,10 @@ pub async fn research_pull(
         }
     }
 
-    let exec = crate::engine::executor::execute_task_with_token(conn, &task.id, None, false)
-        .await
-        .map_err(|e| e.to_string())?;
+    let exec =
+        crate::engine::executor::execute_task_with_token(conn, &task.id, None, false, false)
+            .await
+            .map_err(|e| e.to_string())?;
 
     let fresh = task_store::get_task(conn, &task.id).map_err(|e| e.to_string())?;
     let selectable = extract_selectable_if_any(&fresh);

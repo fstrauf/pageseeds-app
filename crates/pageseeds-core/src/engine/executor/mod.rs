@@ -51,16 +51,34 @@ pub struct FollowUpTask {
 
 const MAX_PROGRESS_OUTPUT_CHARS: usize = 4_000;
 
+// ─── not_before due check ─────────────────────────────────────────────────────
+
+/// Returns true when the task may run at `now`.
+///
+/// - `not_before` is `None` → due
+/// - unparseable RFC3339 → due (fail open; queue SQL is the other gate)
+/// - parsed timestamp ≤ `now` → due
+/// - parsed timestamp > `now` → not due
+pub fn task_is_due(task: &Task, now: chrono::DateTime<Utc>) -> bool {
+    match task.not_before.as_deref() {
+        None => true,
+        Some(ts) => match chrono::DateTime::parse_from_rfc3339(ts) {
+            Ok(due) => due.with_timezone(&Utc) <= now,
+            Err(_) => true,
+        },
+    }
+}
+
 // ─── Engine ───────────────────────────────────────────────────────────────────
 
 pub async fn execute_task(conn: &Connection, task_id: &str) -> Result<ExecutionResult, String> {
-    execute_task_with_token(conn, task_id, None, false).await
+    execute_task_with_token(conn, task_id, None, false, false).await
 }
 
 /// Run `execute_task_with_token` in dry-run mode — plans steps but does not
 /// call any `exec_*` functions or modify database state.
 pub async fn dry_run_task(conn: &Connection, task_id: &str) -> Result<ExecutionResult, String> {
-    execute_task_with_token(conn, task_id, None, true).await
+    execute_task_with_token(conn, task_id, None, true, false).await
 }
 
 pub async fn execute_task_with_token(
@@ -68,8 +86,21 @@ pub async fn execute_task_with_token(
     task_id: &str,
     gsc_token: Option<&str>,
     dry_run: bool,
+    force: bool,
 ) -> Result<ExecutionResult, String> {
     let mut task = task_store::get_task(conn, task_id).map_err(|e| e.to_string())?;
+
+    // not_before gate: block early runs unless --force. Applied before any
+    // InProgress transition so dry-run and execute share the same rail.
+    if !force && !task_is_due(&task, Utc::now()) {
+        let ts = task
+            .not_before
+            .as_deref()
+            .unwrap_or("(unknown not_before)");
+        return Err(format!(
+            "Task is not due until {ts} (not_before). Re-run with --force to override."
+        ));
+    }
 
     let started_at = Utc::now().to_rfc3339();
 
