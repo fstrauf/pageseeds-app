@@ -24,22 +24,70 @@ pub(crate) fn exec_content_sync(
         conn,
         &task.project_id,
     ) {
-        Ok(result) => {
+        Ok(mut result) => {
+            // Best-effort re-export so articles.json cannot lag SQLite (#316).
+            // On success, clear export_lag and recompute next_action so the
+            // report matches disk. On failure, keep lag and surface in message.
+            let export_note = match crate::content::article_index::export_projection(
+                conn,
+                &task.project_id,
+                &paths.repo_root,
+            ) {
+                Ok(_) => {
+                    if !result.export_lag.is_empty() {
+                        result.export_lag.clear();
+                        if result.next_action.contains("Re-export articles.json") {
+                            result.next_action =
+                                next_action_without_export_lag(&result);
+                        }
+                    }
+                    None
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[content_sync] Failed to re-export articles.json after sync: {}",
+                        e
+                    );
+                    Some(format!("; re-export articles.json failed: {}", e))
+                }
+            };
+
             let output =
                 serde_json::to_string_pretty(&result).unwrap_or_else(|_| format!("{:?}", result));
             let ok = result.missing_files.is_empty() && result.malformed_file_refs.is_empty();
             crate::engine::workflows::StepResult {
                 success: ok,
                 message: format!(
-                    "content_sync: {} — {}",
+                    "content_sync: {} — {}{}",
                     if ok { "OK" } else { "issues found" },
-                    result.next_action
+                    result.next_action,
+                    export_note.as_deref().unwrap_or("")
                 ),
                 output: Some(output),
                 artifact_key: None,
             }
         }
         Err(e) => crate::engine::workflows::StepResult::fail(format!("content_sync failed: {}", e)),
+    }
+}
+
+/// Recompute `next_action` after a successful re-export cleared `export_lag`.
+///
+/// Mirrors the priority order in `content::ops::sync_and_validate` (with
+/// export_lag treated as empty and `apply_sync=false` as used by this step).
+fn next_action_without_export_lag(result: &crate::content::ops::SyncValidateResult) -> String {
+    if !result.duplicate_prefixes.is_empty() {
+        "Resolve duplicate numeric prefixes in content filenames".into()
+    } else if !result.missing_files.is_empty() {
+        "Fix missing content files referenced by articles.json".into()
+    } else if !result.malformed_file_refs.is_empty() {
+        "Fix malformed file references in articles.json".into()
+    } else if !result.date_mismatches.is_empty() {
+        "Date mismatches found — re-run with apply_sync=true to patch frontmatter".into()
+    } else if !result.orphan_files.is_empty() {
+        "Review orphan content files not referenced in articles.json".into()
+    } else {
+        "Index and content are in sync".into()
     }
 }
 

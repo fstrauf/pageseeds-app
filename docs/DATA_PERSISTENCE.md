@@ -400,8 +400,13 @@ MDX files on disk  ◄────────►  articles.json  ◄───�
                                   └────── db::export ─────────┘
 ```
 
-1. `content::ops::sync_articles()` reconciles MDX files with `articles.json`
-2. `db::export::write_articles_to_repo()` writes `articles.json` after task changes
+1. `content::ops::sync_and_validate()` reconciles SQLite + MDX files and reports
+   `export_lag` when DB article ids diverge from the read-only `articles.json` projection
+2. `content_sync` (`exec_content_sync`) always re-exports the projection after a
+   successful `sync_and_validate` (`article_index::export_projection`) so
+   `articles.json` cannot lag SQLite (issue #316)
+3. `db::export::write_articles_to_repo()` also writes `articles.json` after other
+   task/catalog mutations
 
 ### Task Execution Flow
 

@@ -81,19 +81,8 @@ pub(crate) fn exec_coverage_load_articles(task: &Task, _project_path: &str) -> S
         }
     };
 
-    let article_summaries: Vec<serde_json::Value> = articles
-        .iter()
-        .map(|a| {
-            serde_json::json!({
-                "id": a.id,
-                "title": &a.title,
-                "slug": &a.url_slug,
-                "target_keyword": a.target_keyword.as_deref().unwrap_or(""),
-                "file": &a.file,
-                "status": &a.status,
-            })
-        })
-        .collect();
+    let article_summaries =
+        build_coverage_article_summaries(&db, &task.project_id, &articles);
 
     let output = serde_json::json!({
         "article_count": article_summaries.len(),
@@ -109,6 +98,52 @@ pub(crate) fn exec_coverage_load_articles(task: &Task, _project_path: &str) -> S
         output: Some(output.to_string()),
         artifact_key: None,
     }
+}
+
+/// Recent window (days) for GSC demand rollup on coverage article summaries.
+const COVERAGE_GSC_PERIOD_DAYS: i64 = 28;
+
+/// Build per-article coverage summaries with optional GSC demand rollup.
+///
+/// Uses [`crate::db::gsc_join`] page index + bulk window metrics (same pattern as
+/// site_state catalog). Articles with no GSC rows omit the `gsc` field;
+/// [`calculate_cluster_metrics`] already defaults missing GSC.
+pub(crate) fn build_coverage_article_summaries(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    articles: &[crate::models::article::Article],
+) -> Vec<serde_json::Value> {
+    use crate::content::slug::normalize_url_slug;
+    use crate::db::gsc_join::{build_page_index, recent_window, rollup_for_slug};
+
+    let page_index = build_page_index(conn, project_id).unwrap_or_default();
+    let (start, end) = recent_window(COVERAGE_GSC_PERIOD_DAYS);
+    let metrics_by_page =
+        crate::db::gsc_page_daily_window_metrics_bulk(conn, project_id, &start, &end)
+            .unwrap_or_default();
+
+    articles
+        .iter()
+        .map(|a| {
+            let slug = normalize_url_slug(&a.url_slug);
+            let (metrics, _) = rollup_for_slug(&page_index, &metrics_by_page, &slug);
+            let mut summary = serde_json::json!({
+                "id": a.id,
+                "title": &a.title,
+                "slug": &a.url_slug,
+                "target_keyword": a.target_keyword.as_deref().unwrap_or(""),
+                "file": &a.file,
+                "status": &a.status,
+            });
+            if let Some(m) = metrics {
+                summary["gsc"] = serde_json::json!({
+                    "position": m.position,
+                    "impressions": m.impressions.round() as i64,
+                });
+            }
+            summary
+        })
+        .collect()
 }
 
 fn slug_from_live_site_path(path: &str) -> String {
@@ -382,11 +417,13 @@ pub(crate) fn exec_coverage_cluster_analysis(
     // Parse the agent output to extract clusters
     let mut clusters = crate::engine::text::extract_json(&raw_output).unwrap_or_else(|| {
         serde_json::json!({
-            "generated_at": chrono::Utc::now().to_rfc3339(),
             "article_count": article_count,
             "clusters": [],
         })
     });
+
+    // Producer stamps wall-clock; never trust model-fabricated generated_at (#316).
+    crate::engine::exec::common::stamp_state_generated_at(&mut clusters);
 
     // NEW: Enhance clusters with authority scores and gap detection
     log::info!("[coverage_cluster] Enhancing clusters with authority scores");
@@ -491,7 +528,6 @@ Return ONLY one valid JSON object. No markdown fences, no commentary.
 
 ```json
 {{
-  "generated_at": "<ISO-8601 timestamp>",
   "article_count": <total number of articles analyzed>,
   "clusters": [
     {{
@@ -506,6 +542,7 @@ Return ONLY one valid JSON object. No markdown fences, no commentary.
 ```
 
 Requirements:
+- Do NOT include generated_at — the producer stamps wall-clock time.
 - cluster_id: Use snake_case, no spaces (e.g., "react_hooks", "budget_planning")
 - cluster_name: Use Title Case, descriptive (e.g., "React Hooks", "Budget Planning")
 - article_ids: Array of integers matching the article "id" fields from input
@@ -675,4 +712,118 @@ pub fn get_coverage_status(project_path: &str) -> (bool, String) {
     };
 
     (true, age_desc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+    use rusqlite::Connection;
+
+    fn in_memory_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_with_conn(&conn).unwrap();
+        conn
+    }
+
+    fn insert_project(conn: &Connection, id: &str) {
+        conn.execute(
+            "INSERT INTO projects (id, name, path, active, project_mode)
+             VALUES (?1, 'Test', '/tmp/test', 1, 'workspace')",
+            [id],
+        )
+        .unwrap();
+    }
+
+    fn insert_article(conn: &Connection, project_id: &str, id: i64, slug: &str) {
+        conn.execute(
+            "INSERT INTO articles (
+                id, project_id, title, url_slug, file, status, target_keyword,
+                content_gaps_addressed, target_volume, word_count, review_count
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'published', 'kw', '[]', 0, 100, 0)",
+            rusqlite::params![
+                id,
+                project_id,
+                format!("Title {slug}"),
+                slug,
+                format!("content/{slug}.mdx"),
+            ],
+        )
+        .unwrap();
+    }
+
+    fn daily_row(
+        page: &str,
+        date: &str,
+        impressions: f64,
+        position: f64,
+    ) -> crate::models::gsc::PageDailyMetrics {
+        crate::models::gsc::PageDailyMetrics {
+            page: page.to_string(),
+            date: date.to_string(),
+            clicks: 1.0,
+            impressions,
+            ctr: 0.01,
+            position,
+        }
+    }
+
+    #[test]
+    fn coverage_article_summaries_include_gsc_when_page_daily_seeded() {
+        let conn = in_memory_db();
+        insert_project(&conn, "proj1");
+        insert_article(&conn, "proj1", 1, "alpha-post");
+        insert_article(&conn, "proj1", 2, "no-gsc-yet");
+
+        let end = Utc::now().date_naive() - Duration::days(1);
+        let d1 = end.format("%Y-%m-%d").to_string();
+        let rows = vec![daily_row(
+            "https://example.com/blog/alpha-post",
+            &d1,
+            250.0,
+            12.5,
+        )];
+        crate::db::insert_gsc_page_daily_snapshots(&conn, "proj1", &rows).unwrap();
+
+        let articles = crate::content::article_index::list_articles(&conn, "proj1").unwrap();
+        let summaries = build_coverage_article_summaries(&conn, "proj1", &articles);
+
+        let alpha = summaries
+            .iter()
+            .find(|s| s["slug"] == "alpha-post")
+            .expect("alpha summary");
+        assert!(
+            alpha["gsc"]["impressions"].as_i64().unwrap_or(0) > 0,
+            "expected gsc.impressions > 0, got {:?}",
+            alpha.get("gsc")
+        );
+        assert!(
+            alpha["gsc"]["position"].as_f64().unwrap_or(0.0) > 0.0,
+            "expected gsc.position, got {:?}",
+            alpha.get("gsc")
+        );
+
+        let bare = summaries
+            .iter()
+            .find(|s| s["slug"] == "no-gsc-yet")
+            .expect("no-gsc summary");
+        assert!(
+            bare.get("gsc").is_none() || bare["gsc"].is_null(),
+            "articles without GSC should omit gsc: {:?}",
+            bare.get("gsc")
+        );
+    }
+
+    #[test]
+    fn calculate_cluster_metrics_reads_gsc_from_summaries() {
+        let articles = serde_json::json!({
+            "articles": [
+                {"id": 1, "gsc": {"position": 10.0, "impressions": 100}},
+                {"id": 2, "gsc": {"position": 20.0, "impressions": 50}},
+            ]
+        });
+        let (avg_pos, impressions) = calculate_cluster_metrics(&[1, 2], &articles);
+        assert!((avg_pos - 15.0).abs() < 1e-9);
+        assert_eq!(impressions, 150);
+    }
 }
