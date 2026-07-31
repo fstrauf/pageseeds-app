@@ -273,6 +273,7 @@ pub fn build_site_overview(
     );
 
     let outcomes = build_outcomes_inventory(conn, project_id);
+    let conversion = build_conversion_overview(conn, project_id, period_days);
 
     let hints = build_hints(
         has_any_gsc,
@@ -316,6 +317,7 @@ pub fn build_site_overview(
         non_catalog_gsc,
         declining_pages,
         outcomes,
+        conversion,
         hints,
     })
 }
@@ -819,6 +821,55 @@ fn build_hard_cannibalization_inventory(
 
 // GSC page-index / window / rollup helpers live in `db::gsc_join` (shared with
 // territory analysis — single SoT, issue #167 / PR #176).
+
+/// PostHog conversion tape rollup for site-overview (issue #308).
+///
+/// Empty-safe: missing tape → `source: "none"`, empty `top_pages`.
+fn build_conversion_overview(
+    conn: &Connection,
+    project_id: &str,
+    window_days: i64,
+) -> ConversionOverview {
+    let latest_fetched_at = crate::posthog::db::latest_fetched_at(conn, project_id)
+        .ok()
+        .flatten();
+
+    let (age_days, source) = match &latest_fetched_at {
+        Some(ts) => {
+            let age = chrono::DateTime::parse_from_rfc3339(ts)
+                .ok()
+                .map(|t| Utc::now().signed_duration_since(t).num_days());
+            (age, "posthog_page_daily".to_string())
+        }
+        None => (None, "none".to_string()),
+    };
+
+    let (start, end) = recent_window(window_days);
+    let mut top_pages = Vec::new();
+    if source != "none" {
+        if let Ok(pages) = crate::posthog::db::page_totals_window(conn, project_id, &start, &end) {
+            top_pages = pages
+                .into_iter()
+                .take(CONVERSION_TOP_PAGES_CAP)
+                .map(|p| ConversionPageSample {
+                    page: p.page,
+                    total: p.total,
+                    events: p.events,
+                })
+                .collect();
+        }
+    }
+
+    ConversionOverview {
+        freshness: ConversionFreshness {
+            latest_fetched_at,
+            age_days,
+            source,
+        },
+        window_days,
+        top_pages,
+    }
+}
 
 /// Desk GSC tape freshness from `gsc_page_daily` only (issue #164).
 ///

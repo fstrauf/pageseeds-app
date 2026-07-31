@@ -715,6 +715,84 @@ fn gsc_freshness_fresh_tape_not_stale() {
     let _ = fs::remove_dir_all(&project);
 }
 
+/// Issue #308: conversion block is always present and empty-safe when tape missing.
+#[test]
+fn conversion_overview_empty_safe_when_tape_missing() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(
+        &conn, "proj1", 1, "lonely", "Lonely", "content/l.mdx", "published", 10,
+    );
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.conversion.freshness.source, "none");
+    assert!(overview.conversion.freshness.latest_fetched_at.is_none());
+    assert!(overview.conversion.freshness.age_days.is_none());
+    assert!(overview.conversion.top_pages.is_empty());
+    assert_eq!(overview.conversion.window_days, 28);
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+/// Issue #308: populated conversion tape surfaces top pages + freshness.
+#[test]
+fn conversion_overview_populated_from_tape() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(
+        &conn, "proj1", 1, "foo", "Foo", "content/f.mdx", "published", 10,
+    );
+
+    let (d1, _) = recent_dates();
+    crate::posthog::db::insert_rows(
+        &conn,
+        "proj1",
+        &[
+            crate::posthog::models::PosthogPageDailyRow {
+                page: "/blog/foo".into(),
+                event: "signup_started".into(),
+                date: d1.clone(),
+                count: 5.0,
+            },
+            crate::posthog::models::PosthogPageDailyRow {
+                page: "/blog/foo".into(),
+                event: "cta_clicked".into(),
+                date: d1.clone(),
+                count: 12.0,
+            },
+            crate::posthog::models::PosthogPageDailyRow {
+                page: "/pricing".into(),
+                event: "signup_started".into(),
+                date: d1,
+                count: 2.0,
+            },
+        ],
+    )
+    .unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(overview.conversion.freshness.source, "posthog_page_daily");
+    assert!(overview.conversion.freshness.latest_fetched_at.is_some());
+    assert!(!overview.conversion.top_pages.is_empty());
+    // Highest total first: /blog/foo = 17
+    assert_eq!(overview.conversion.top_pages[0].page, "/blog/foo");
+    assert_eq!(overview.conversion.top_pages[0].total, 17.0);
+    assert!(
+        overview.conversion.top_pages[0]
+            .events
+            .get("signup_started")
+            .copied()
+            .unwrap_or(0.0)
+            > 0.0
+    );
+
+    let _ = fs::remove_dir_all(&project);
+}
+
 /// Issue #166: underscore + hyphen (and trailing-slash) GSC page URLs that
 /// normalize to the same catalog slug must sum impressions/clicks; url_variants
 /// exposes the multi-URL inventory.

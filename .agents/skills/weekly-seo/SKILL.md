@@ -524,7 +524,7 @@ separate `refresh_ground_truth` product; do not treat its absence as a blocker.
 | Live demand / deltas | `gsc-performance`, `gsc-movers`, `gsc-queries` (cheap ad-hoc truth) |
 | Stale snapshots / desk cache | `create-task -t collect_gsc` then **`execute-task` this run** if needed |
 | Clarity (if configured) | same pattern with `collect_clarity` |
-| PostHog behavioral | **Default** light desk after GSC shortlist — see [PostHog desk](#posthog-desk); MCP only, not a CLI task |
+| PostHog behavioral | **Default** light desk after GSC shortlist — see [PostHog desk](#posthog-desk); skill path = MCP only. Engine tape (`collect_posthog` / `site-overview.conversion`) is separate store-of-record — cite when present |
 
 - **Desk tape flag:** On `site-overview` / `articles`, read `freshness.stale` and `freshness.hint` before treating zero impressions/clicks as demand truth (empty/stale `gsc_page_daily` is not “no traffic”).
 
@@ -670,7 +670,17 @@ first. Counts toward ≤5 creates only if you act; inventory note-only is fine.
 **Role:** light **behavioral / engagement** signal next to GSC demand — not a
 second ground truth, not a full product weekly review (that is
 `posthog-weekly-insights`). Use only to **re-rank or strengthen** SEO actions
-already justified by desk/GSC evidence. **No CLI wrapper** — PostHog is MCP-only.
+already justified by desk/GSC evidence.
+
+**Two lanes (do not conflate):**
+
+| Lane | Role | Who owns it |
+|------|------|-------------|
+| **Skill desk (MCP)** | Live behavioral ranking this session — bounce, paths, light CWV | This skill via PostHog MCP only — **no skill-side CLI collect** |
+| **Engine conversion tape** | Store of record: `collect_posthog` → `posthog_page_daily` / `posthog_collection.json` | Product engine (system AutoEnqueue task). Desk may **cite** deterministically from `site-overview.conversion` when present |
+
+Skill desk stays MCP for live ranking. The engine tape is not a substitute for
+the light MCP desk, and the skill must not reimplement collect.
 
 **Assumption:** PostHog MCP is available in operator sessions. Do **not** design
 the happy path around “maybe no MCP.” Treat absence as a **warn + continue**
@@ -753,7 +763,9 @@ Always prefer `filterTestAccounts` / project defaults that exclude internal user
 - Querying the wrong PostHog project “because something returned data”
 - Inventing SEO demand from DAU/pageviews alone
 - Burning exploration budget on replay deep-dives
-- Building a pageseeds-cli PostHog collect task for this skill path
+- Building a pageseeds-cli / skill-path PostHog collect for this MCP desk path
+  (the engine already owns system task `collect_posthog` as the conversion tape
+  — skill must not reimplement it; may cite `site-overview.conversion` when present)
 
 
 ### Research strategy package (#141 / #255 / #275)
@@ -1104,7 +1116,9 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 - Real product/CLI gaps only (missing tools, auth). Desk tape refresh is
   `collect_gsc` + execute — not blocked on a `refresh_ground_truth` product.
 - PostHog MCP missing or missing `posthog_project_id` → **WARN** and fix
-  `project.yaml` — no skill fallbacks, no CLI `collect_posthog`.
+  `project.yaml` — no skill fallbacks. Engine system task `collect_posthog`
+  owns the conversion tape (not a skill invent); skill desk remains MCP-only
+  for live ranking.
 
 ## Recommended next actions
 …

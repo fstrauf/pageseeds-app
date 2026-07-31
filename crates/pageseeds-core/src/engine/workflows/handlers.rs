@@ -27,7 +27,10 @@ pub struct CollectionHandler;
 
 impl WorkflowHandler for CollectionHandler {
     fn supports(&self, task: &Task) -> bool {
-        matches!(task_type(task), "collect_gsc" | "collect_clarity")
+        matches!(
+            task_type(task),
+            "collect_gsc" | "collect_clarity" | "collect_posthog"
+        )
     }
 
     fn plan(&self, task: &Task) -> Vec<WorkflowStep> {
@@ -40,10 +43,14 @@ impl WorkflowHandler for CollectionHandler {
                 "collect_clarity_export",
                 StepKind::CollectClarity,
             )],
+            "collect_posthog" => vec![WorkflowStep::new(
+                "collect_posthog_export",
+                StepKind::CollectPosthog,
+            )],
             // A collection task without a real data source must not silently
-            // succeed via a generic agentic step (the collect_posthog placebo
-            // from issue #27). Unreachable via `supports`, but fail closed:
-            // a manual step cannot auto-complete as fake work.
+            // succeed via a generic agentic step (issue #27). Unreachable via
+            // `supports`, but fail closed: a manual step cannot auto-complete
+            // as fake work.
             _ => vec![WorkflowStep::new(
                 &format!("{}_manual", task_type(task)),
                 StepKind::Manual,

@@ -137,9 +137,6 @@ const DEFINITIONS: &[TaskDefinition] = &[
         handler_family: HandlerFamily::Research,
     },
     // Collection
-    // NOTE: collect_posthog was removed (issue #27) — it had no PostHog
-    // integration and reported success without collecting anything. Re-add
-    // only once a real implementation exists.
     TaskDefinition {
         task_type: "collect_gsc",
         phase: "collection",
@@ -156,9 +153,20 @@ const DEFINITIONS: &[TaskDefinition] = &[
         follow_up_policy: FollowUpPolicy::None,
         handler_family: HandlerFamily::Collection,
     },
+    // PostHog conversion tape (issue #308) — real Query API collect; fail closed
+    // without posthog_project_id / POSTHOG_API_KEY (never success-without-fetch #27).
+    TaskDefinition {
+        task_type: "collect_posthog",
+        phase: "collection",
+        run_policy: TaskRunPolicy::AutoEnqueue,
+        review_surface: TaskReviewSurface::None,
+        follow_up_policy: FollowUpPolicy::None,
+        handler_family: HandlerFamily::Collection,
+    },
     // Investigation
-    // NOTE: investigate_posthog was removed with collect_posthog (issue #27) —
-    // it analyzed data that was never collected.
+    // NOTE: investigate_posthog remains removed (issue #27) — conversion tape is
+    // evidence for content_outcome_review / site-overview, not a separate agentic
+    // investigate task.
     TaskDefinition {
         task_type: "investigate_gsc",
         phase: "investigation",

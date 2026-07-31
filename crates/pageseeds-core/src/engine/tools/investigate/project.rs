@@ -167,6 +167,7 @@ impl Tool for ArticleLinkGraphTool {
 pub const ORCHESTRATOR_TASK_TYPES: &[&str] = &[
     "collect_gsc",
     "collect_clarity",
+    "collect_posthog",
     "ctr_audit",
     "indexing_diagnostics",
     "cannibalization_audit",

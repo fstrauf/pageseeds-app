@@ -351,6 +351,13 @@ pub(super) fn build_handlers() -> HashMap<StepKind, HandlerFn> {
 
         register_blocking!(
             handlers,
+            StepKind::CollectPosthog,
+            crate::engine::exec::posthog::exec_collect_posthog,
+            db_conn
+        );
+
+        register_blocking!(
+            handlers,
             StepKind::ClaritySummarise,
             crate::engine::exec::clarity::exec_clarity_summarise,
             db_conn

@@ -18,6 +18,7 @@ pub mod indexing_health;
 pub mod intent_classifier;
 pub mod keywords;
 pub mod outcome_review;
+pub mod posthog;
 pub mod quality_rater;
 pub mod reddit;
 pub mod research;
