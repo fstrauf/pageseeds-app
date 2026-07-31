@@ -69,30 +69,49 @@ pub fn task_is_due(task: &Task, now: chrono::DateTime<Utc>) -> bool {
     }
 }
 
+// ─── Execute options ──────────────────────────────────────────────────────────
+
+/// Options for [`execute_task_with_token`]. Prefer named fields over trailing bools.
+#[derive(Debug, Clone, Default)]
+pub struct ExecuteOpts {
+    /// Plan steps only; do not call `exec_*` or modify DB state after planning.
+    pub dry_run: bool,
+    /// When true, skip the not_before due gate (CLI `--force`).
+    pub ignore_not_before: bool,
+}
+
 // ─── Engine ───────────────────────────────────────────────────────────────────
 
 pub async fn execute_task(conn: &Connection, task_id: &str) -> Result<ExecutionResult, String> {
-    execute_task_with_token(conn, task_id, None, false, false).await
+    execute_task_with_token(conn, task_id, None, &ExecuteOpts::default()).await
 }
 
 /// Run `execute_task_with_token` in dry-run mode — plans steps but does not
 /// call any `exec_*` functions or modify database state.
 pub async fn dry_run_task(conn: &Connection, task_id: &str) -> Result<ExecutionResult, String> {
-    execute_task_with_token(conn, task_id, None, true, false).await
+    execute_task_with_token(
+        conn,
+        task_id,
+        None,
+        &ExecuteOpts {
+            dry_run: true,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 pub async fn execute_task_with_token(
     conn: &Connection,
     task_id: &str,
     gsc_token: Option<&str>,
-    dry_run: bool,
-    force: bool,
+    opts: &ExecuteOpts,
 ) -> Result<ExecutionResult, String> {
     let mut task = task_store::get_task(conn, task_id).map_err(|e| e.to_string())?;
 
     // not_before gate: block early runs unless --force. Applied before any
     // InProgress transition so dry-run and execute share the same rail.
-    if !force && !task_is_due(&task, Utc::now()) {
+    if !opts.ignore_not_before && !task_is_due(&task, Utc::now()) {
         let ts = task
             .not_before
             .as_deref()
@@ -101,6 +120,8 @@ pub async fn execute_task_with_token(
             "Task is not due until {ts} (not_before). Re-run with --force to override."
         ));
     }
+
+    let dry_run = opts.dry_run;
 
     let started_at = Utc::now().to_rfc3339();
 
@@ -522,3 +543,5 @@ pub(crate) fn completed_task_status(task_type: &str, all_ok: bool) -> TaskStatus
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod not_before_tests;

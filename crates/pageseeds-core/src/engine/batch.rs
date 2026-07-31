@@ -143,7 +143,14 @@ pub async fn run_batch_with_token(
 
         log::info!("[batch] executing task {task_id} ({task_type})");
 
-        match executor::execute_task_with_token(conn, &task_id, gsc_token, false, false).await {
+        match executor::execute_task_with_token(
+            conn,
+            &task_id,
+            gsc_token,
+            &executor::ExecuteOpts::default(),
+        )
+        .await
+        {
             Ok(exec_result) => {
                 let batch_task_result = BatchTaskResult {
                     task_id: task_id.clone(),

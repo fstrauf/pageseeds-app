@@ -13,15 +13,16 @@ outcome reviews). Until that time the task must not run automatically.
 
 1. **Queue lease filter** — `engine/queue.rs` `get_next_pending_item` only
    leases rows where `not_before IS NULL OR not_before <= now`.
-2. **Executor root** — `execute_task_with_token(..., force)` refuses execution
-   when `not_before` parses as strictly after `Utc::now()` and `force == false`.
-   Error message includes the due timestamp and points at `--force`. Batch
-   `get_ready_tasks` applies the same due check in-memory so the scheduler
-   never picks a not-due task. Shared helper: `executor::task_is_due`.
+2. **Executor root** — `execute_task_with_token(..., opts)` refuses execution
+   when `not_before` parses as strictly after `Utc::now()` and
+   `opts.ignore_not_before == false`. Error message includes the due timestamp
+   and points at `--force`. Batch `get_ready_tasks` applies the same due check
+   in-memory so the scheduler never picks a not-due task. Shared helper:
+   `executor::task_is_due`.
 
 Unparseable / missing `not_before` is treated as due (fail open). CLI
-`execute-task --force` is the only intentional override path; batch/queue
-always pass `force: false`.
+`execute-task --force` maps to `ExecuteOpts { ignore_not_before: true, .. }`;
+batch/queue always pass `ExecuteOpts::default()`.
 
 ---
 

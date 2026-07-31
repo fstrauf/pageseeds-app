@@ -475,9 +475,13 @@ fn execute_task(db_path: &str, args: &[String]) -> Result<serde_json::Value, Str
     let force = has_flag(args, "--force", "");
     let conn = open_db(db_path)?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let opts = pageseeds_core::engine::executor::ExecuteOpts {
+        dry_run: false,
+        ignore_not_before: force,
+    };
     let result = rt.block_on(async {
         pageseeds_core::engine::executor::execute_task_with_token(
-            &conn, &task_id, None, false, force,
+            &conn, &task_id, None, &opts,
         )
         .await
     })?;
