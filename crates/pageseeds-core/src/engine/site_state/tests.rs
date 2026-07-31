@@ -1342,6 +1342,56 @@ fn declining_pages_empty_without_prior_window() {
     let _ = fs::remove_dir_all(&project);
 }
 
+/// Total collapse 500→0 with **no recent rollup rows** must still appear in
+/// declining_pages (#319). Prior code required both recent and prev Some(_).
+#[test]
+fn declining_pages_total_collapse_missing_recent_rollup() {
+    let conn = in_memory_db();
+    let project = temp_project();
+    let project_path = project.to_string_lossy().to_string();
+    insert_project(&conn, "proj1", &project_path);
+    insert_article(
+        &conn, "proj1", 1, "collapsed", "Collapsed", "content/c.mdx", "published", 100,
+    );
+
+    let (p1, _) = previous_dates();
+    // Only prior-window rows — no recent window data at all.
+    crate::db::insert_gsc_page_daily_snapshots(
+        &conn,
+        "proj1",
+        &[daily_row(
+            "https://example.com/blog/collapsed",
+            &p1,
+            20.0,
+            500.0,
+        )],
+    )
+    .unwrap();
+
+    let overview = build_site_overview(&conn, "proj1", &project_path, Some(28)).unwrap();
+    assert_eq!(
+        overview.declining_pages.count, 1,
+        "500→0 missing-recent must count as declining"
+    );
+    let sample = overview
+        .declining_pages
+        .sample
+        .iter()
+        .find(|s| s.slug == "collapsed")
+        .expect("collapsed slug in sample");
+    assert!((sample.prev_impressions - 500.0).abs() < 1e-9);
+    assert!((sample.recent_impressions - 0.0).abs() < 1e-9);
+    assert!((sample.drop_pct - 1.0).abs() < 1e-9);
+    assert!(
+        overview
+            .hints
+            .iter()
+            .any(|h| h == "Declining-impression pages present")
+    );
+
+    let _ = fs::remove_dir_all(&project);
+}
+
 #[test]
 fn declining_pages_sort_and_sample_cap() {
     let conn = in_memory_db();

@@ -303,7 +303,15 @@ The research shortlist is **dual fuel** (issue #274):
 
 Other sources: `manual`, and documented future `coverage_gap` (no writer yet).
 
-**Path B `research-context` (issues #192 / #258 / #274 / #276):** CLI calls `build_research_context` (max age 7 days), which runs `ensure_research_shortlist_fresh`, then **re-annotates** existing shortlist rows' `strategy_cluster` / `strategy_status` from live strategy (`project.yaml` via ensure; cheap; no full territory re-run), then **always injects** Primary/ACTIVE strategy seeds (`inject_strategy_shortlist_seeds` — runs even when territory is `skipped_fresh`), then pure `build_research_strategy_package` into a typed `ResearchContextPackage` envelope. When the shortlist is empty or territory rows are stale, ensure runs the same territory core (`run_territory_analysis(conn, project_id)`) used by `update_research_shortlist` / the research step; territory also injects strategy seeds after its upserts. Package JSON includes `shortlist_refreshed`, `shortlist_refresh_reason` (`empty` | `stale` | `skipped_fresh` | `failed`), territory diagnostics when a refresh ran, and per-row `strategy_cluster` / `strategy_status` when matched. The package also exposes `content_strategy.status` (`empty` | `partial` | `ok`); empty remains a gate no-op (not hard-fail) and recovery guidance is prepended when status is empty/partial. Empty/missing strategy is a no-op (full shortlist; no false empty). `custom_keyword_research` / `research-pull` still does **not** write shortlist.
+**Path B `research-context` (issues #192 / #258 / #274 / #276 / #304):** CLI calls `build_research_context` (max age 7 days), which runs this pipeline in order:
+
+1. `ensure_research_shortlist_fresh` — when empty or territory rows are stale, runs the same territory core (`run_territory_analysis(conn, project_id)`) used by `update_research_shortlist` / the research step; territory also injects strategy seeds after its upserts.
+2. **Re-annotate** existing shortlist rows' `strategy_cluster` / `strategy_status` from live strategy (`project.yaml` via ensure; cheap; no full territory re-run).
+3. **Always inject** Primary/ACTIVE strategy seeds (`inject_strategy_shortlist_seeds` — runs even when territory is `skipped_fresh`).
+4. **Always inject** uncovered GSC query demand (`inject_gsc_uncovered_seeds` — aggregated query-level GSC demand without article/strategy coverage seeds the shortlist; issue #304).
+5. Pure `build_research_strategy_package` into a typed `ResearchContextPackage` envelope.
+
+Package JSON includes `shortlist_refreshed`, `shortlist_refresh_reason` (`empty` | `stale` | `skipped_fresh` | `failed`), territory diagnostics when a refresh ran, and per-row `strategy_cluster` / `strategy_status` when matched. The package also exposes `content_strategy.status` (`empty` | `partial` | `ok`); empty remains a gate no-op (not hard-fail) and recovery guidance is prepended when status is empty/partial. Empty/missing strategy is a no-op (full shortlist; no false empty). `custom_keyword_research` / `research-pull` still does **not** write shortlist.
 
 After `content_review` or `content_audit` completes, a deterministic reducer loads the latest audit from SQLite (via `load_audit_snapshot`), aggregates signals by `target_keyword`, and updates `research_shortlist.health_status`.
 

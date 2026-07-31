@@ -45,7 +45,7 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 | Tool | Notes |
 |------|--------|
 | `site-overview` | Site State overview (includes `outcomes` aggregates) |
-| `ctr-outcomes` | CTR closed-loop: deploy-verify + classify + report rollup (#302) |
+| `ctr-outcomes` | CTR closed-loop: deploy-verify + classify + report rollup (#302). May hit the **network** for live title verification when classifying ready rows. |
 | `articles` | Article catalog + filters |
 | `article` | Per-slug package |
 | `article-list` | Lightweight article list |

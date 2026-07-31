@@ -1158,9 +1158,9 @@ fn create_task_success_json(
         std::path::Path::new(project_path),
         task_type,
     ) {
-        v.as_object_mut()
-            .expect("object")
-            .insert("warning".into(), serde_json::Value::String(warning));
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert("warning".into(), serde_json::Value::String(warning));
+        }
     }
     v
 }
@@ -1961,7 +1961,7 @@ const TOOLS: &[ToolHelp] = &[
     ToolHelp {
         name: "fix-submit",
         purpose: "Path B apply patch and/or validate on-disk MDX (-K retargets keyword)",
-        example: "fix-submit -i <id> -p <path> -S <slug> -k content [--patch <json>] [--file <mdx>] [-K <keyword>]",
+        example: "fix-submit -i <id> -p <path> -S <slug> -k content|ctr|refresh [--patch <json>] [--file <mdx>] [-K <keyword>]",
         section: "Path B fix",
     },
     // Audits / reports

@@ -425,6 +425,14 @@ pub fn ingest_orphans(
                 chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
             });
 
+        // Prefer frontmatter status so draft orphans stay draft (#319).
+        let status = meta
+            .status
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("published");
+
         conn.execute(
             "INSERT INTO articles (
                 id, title, url_slug, file, target_keyword, keyword_difficulty,
@@ -442,7 +450,7 @@ pub fn ingest_orphans(
                 0i64,
                 meta.published_date,
                 meta.word_count as i64,
-                "published",
+                status,
                 "[]",
                 Option::<String>::None,
                 project_id,
@@ -557,6 +565,15 @@ mod tests {
         std::fs::write(path, content).unwrap();
     }
 
+    fn write_mdx_with_status(path: &std::path::Path, title: &str, date: &str, status: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let content = format!(
+            "---\ntitle: \"{}\"\ndate: \"{}\"\nstatus: \"{}\"\n---\n\nBody text.\n",
+            title, date, status
+        );
+        std::fs::write(path, content).unwrap();
+    }
+
     fn write_seo_workspace(automation_dir: &std::path::Path, content_dir: &str) {
         std::fs::create_dir_all(automation_dir).unwrap();
         let cfg = format!(r#"{{"content_dir":"{}"}}"#, content_dir);
@@ -655,6 +672,43 @@ mod tests {
         let json = std::fs::read_to_string(auto_dir.join("articles.json")).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(doc["articles"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn ingest_orphan_draft_frontmatter_cataloged_as_draft() {
+        let dir = unique_temp_dir("ps_ai_ingest_draft");
+        let auto_dir = dir.join(".github").join("automation");
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+        write_seo_workspace(&auto_dir, "content");
+
+        write_mdx_with_status(
+            &content_dir.join("002_draft_orphan.mdx"),
+            "Draft Orphan",
+            "2026-02-01",
+            "draft",
+        );
+
+        let conn = in_memory_db();
+        setup_project(&conn, "p1", &dir);
+        conn.execute(
+            "INSERT INTO articles_meta (project_id, next_article_id) VALUES ('p1', 1)",
+            [],
+        )
+        .unwrap();
+
+        let summary = ingest_orphans(&conn, "p1", &dir).unwrap();
+        assert_eq!(summary.ingested, 1);
+
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM articles WHERE project_id = 'p1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "draft", "draft frontmatter must not be forced to published");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn insert_article_with_keyword(

@@ -13,41 +13,7 @@ use rusqlite::Connection;
 
 fn in_memory_db() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS projects (
-            id TEXT PRIMARY KEY, name TEXT NOT NULL,
-            path TEXT NOT NULL, content_dir TEXT, site_url TEXT,
-            site_id TEXT, sitemap_url TEXT,
-            project_mode TEXT NOT NULL DEFAULT 'workspace',
-            active INTEGER NOT NULL DEFAULT 1,
-            agent_provider TEXT, seo_provider TEXT, clarity_project_id TEXT
-         );
-         CREATE TABLE IF NOT EXISTS tasks (
-            id TEXT PRIMARY KEY, type TEXT NOT NULL, phase TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'todo',
-            priority TEXT NOT NULL DEFAULT 'medium',
-            run_policy TEXT NOT NULL DEFAULT 'user_enqueue',
-            review_surface TEXT NOT NULL DEFAULT 'none',
-            follow_up_policy TEXT NOT NULL DEFAULT 'none',
-            agent_policy TEXT NOT NULL DEFAULT 'none',
-            title TEXT, description TEXT,
-            project_id TEXT NOT NULL,
-            depends_on TEXT NOT NULL DEFAULT '[]',
-            artifacts TEXT NOT NULL DEFAULT '[]',
-            run_attempts INTEGER NOT NULL DEFAULT 0,
-            run_last_error TEXT, run_provider TEXT,
-            not_before TEXT,
-            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-         );
-         CREATE TABLE IF NOT EXISTS task_runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id TEXT NOT NULL, attempt INTEGER NOT NULL,
-            provider TEXT, started_at TEXT NOT NULL,
-            finished_at TEXT, success INTEGER, error TEXT,
-            prompt_tokens INTEGER, completion_tokens INTEGER
-         );",
-    )
-    .unwrap();
+    crate::db::init_with_conn(&conn).unwrap();
     conn
 }
 

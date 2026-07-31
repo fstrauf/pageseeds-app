@@ -252,5 +252,72 @@ mod tests {
         assert!(off_mode_create_warning(&dir, "write_article").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Every task type classified by `preferred_modes_for_task_type` must still
+    /// exist in `task_definitions::DEFINITIONS` (drift guard for #319).
+    #[test]
+    fn preferred_modes_types_exist_in_task_definitions() {
+        let classified = [
+            // attract
+            "write_article",
+            "create_content",
+            "research_keywords",
+            "custom_keyword_research",
+            "research_landing_pages",
+            "territory_research",
+            "update_research_shortlist",
+            "publish_content",
+            "cluster_and_link",
+            "interlinking",
+            "create_hub_page",
+            // attract + tools
+            "create_landing_page",
+            // harvest
+            "fix_content_article",
+            "fix_ctr_article",
+            "fix_content",
+            "optimize_article",
+            "optimize_content",
+            "consolidate_cluster",
+            "fix_indexing_internal_links",
+            "content_cleanup",
+            // tools
+            "calculator_rollout",
+            // measure
+            "content_outcome_review",
+            "ctr_outcome_review",
+            "gsc_indexing_outcome_review",
+            "content_audit",
+            "ctr_audit",
+            "cannibalization_audit",
+            "collect_gsc",
+            "analyze_gsc_performance",
+            "seo_health_scan",
+            "review_article_quality",
+            "content_review",
+        ];
+        for tt in classified {
+            assert!(
+                !preferred_modes_for_task_type(tt).is_empty(),
+                "expected non-empty preferred modes for classified type '{tt}'"
+            );
+            assert!(
+                crate::config::task_definitions::find(tt).is_some(),
+                "preferred_modes classifies '{tt}' but task_definitions has no entry — map drift"
+            );
+        }
+        // Unclassified product types stay empty (no false-positive mode warnings).
+        for def in crate::config::task_definitions::all() {
+            let modes = preferred_modes_for_task_type(def.task_type);
+            // If non-empty, primary family must be well-formed.
+            if !modes.is_empty() {
+                assert!(
+                    primary_family_for_task_type(def.task_type).is_some(),
+                    "non-empty preferred modes without primary for {}",
+                    def.task_type
+                );
+            }
+        }
+    }
 }
 

@@ -73,7 +73,13 @@ pub fn list_rows(
                 count: row.get(3)?,
             })
         })?
-        .filter_map(|r| r.ok())
+        .filter_map(|r| match r {
+            Ok(row) => Some(row),
+            Err(e) => {
+                log::warn!("[posthog/db] list_rows: dropping row decode error: {e}");
+                None
+            }
+        })
         .collect();
     Ok(rows)
 }
@@ -154,8 +160,15 @@ pub fn window_event_totals(
     let mapped = stmt.query_map(param_refs.as_slice(), |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
     })?;
-    for r in mapped.flatten() {
-        events.insert(r.0, r.1);
+    for r in mapped {
+        match r {
+            Ok((event, count)) => {
+                events.insert(event, count);
+            }
+            Err(e) => {
+                log::warn!("[posthog/db] window_event_totals: dropping row decode error: {e}");
+            }
+        }
     }
     Ok((days, events))
 }
@@ -186,8 +199,14 @@ pub fn page_totals_window(
             ))
         },
     )?;
-    for r in mapped.flatten() {
-        let (page, event, count, days) = r;
+    for r in mapped {
+        let (page, event, count, days) = match r {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("[posthog/db] page_totals_window: dropping row decode error: {e}");
+                continue;
+            }
+        };
         let entry = by_page.entry(page.clone()).or_insert_with(|| PosthogPageWindow {
             page: page.clone(),
             days_with_data: 0,
@@ -216,7 +235,13 @@ pub fn list_pages(conn: &Connection, project_id: &str) -> Result<Vec<String>> {
     )?;
     let pages = stmt
         .query_map(rusqlite::params![project_id], |row| row.get(0))?
-        .filter_map(|r| r.ok())
+        .filter_map(|r| match r {
+            Ok(page) => Some(page),
+            Err(e) => {
+                log::warn!("[posthog/db] list_pages: dropping row decode error: {e}");
+                None
+            }
+        })
         .collect();
     Ok(pages)
 }

@@ -454,6 +454,9 @@ report. Measure-only:
   the 5d clock.
 - Mode-executing end reports **do** reset the clock (newest mode-executing
   filename becomes the gate baseline).
+- A Phase-0 spacing refusal that is converted to a **measure-only** pass still
+  counts as **measurement-compliant** (#301 / #303 interplay) — do the due
+  outcome reviews / `ctr-outcomes` work and mark **Measure-only: yes**.
 
 #### Override
 
@@ -505,7 +508,7 @@ list-tasks -t content_outcome_review -s todo
 | Rule | Detail |
 |------|--------|
 | Cap | **≤1–2** executes per weekly run (measurement must not dominate ≤15) |
-| Future `not_before` | **Do not** execute — `execute-task` does **not** enforce delay; skill filters client-side |
+| Future `not_before` | **Do not** execute early — `execute-task` **enforces** `not_before` (blocks until due; only `--force` overrides). Skill still filters client-side so you pick due rows and avoid noisy gate errors |
 | Create | **Never** `create-task content_outcome_review`; never may-create |
 | Compliance | **Non-compliant only if** ≥1 due (post-`not_before`) **and zero executed**. Due >2: execute ≤1–2 (prefer high-impr / oldest / measuring-linked); remainder = **deferred under cap** (still compliant). “None due” must be explicit when the filter yields zero. |
 | On `regressed` / `insufficient_data` | Note in report; optional soft desk deep-dive later — **do not** auto-spawn fix fan-out from this alone |
@@ -1055,6 +1058,7 @@ operator runbook: `.agents/skills/video-clip/SKILL.md`.
 
 **Date:** {ISO timestamp}
 **Mode:** {A Attract | B Harvest | C Tools | D Measure} — source: seo_program.yaml `current_mode`={…} | user override | desk-default (file missing)
+**Measure-only:** yes|no
 
 ## Summary
 2–3 sentences: biggest finding and what was done (tie to mode/queues).

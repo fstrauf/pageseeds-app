@@ -5,10 +5,13 @@
 
 use crate::config::env_resolver::EnvResolver;
 use crate::engine::project_paths::ProjectPaths;
+use crate::engine::task_store;
 use crate::engine::workflows::StepResult;
 use crate::models::task::Task;
 use crate::posthog::{
-    client::{normalize_host, PosthogClient, PosthogClientConfig},
+    client::{
+        filter_host_from_site_base_url, normalize_host, PosthogClient, PosthogClientConfig,
+    },
     db, export,
     models::{
         resolve_conversion_events, PosthogCollection, PosthogCollectionMeta,
@@ -16,8 +19,6 @@ use crate::posthog::{
 };
 use crate::project_config::ensure_project_config;
 use rusqlite::Connection;
-
-const WINDOW_DAYS: u8 = 28;
 
 /// Native Rust implementation of the PostHog conversion-tape collection step.
 pub fn exec_collect_posthog(task: &Task, project_path: &str, conn: &Connection) -> StepResult {
@@ -66,40 +67,52 @@ pub fn exec_collect_posthog(task: &Task, project_path: &str, conn: &Connection) 
     // 3. Events: empty config list → defaults at collect time.
     let events = resolve_conversion_events(&config.posthog_conversion_events);
 
-    // Optional host override (EU etc.).
-    let host = resolver
+    // Optional API host override (EU etc.).
+    let api_host = resolver
         .resolve("POSTHOG_HOST")
         .map(|(v, _)| normalize_host(&v))
         .unwrap_or_else(|| "us.posthog.com".to_string());
 
+    // Optional event `$host` filter from project site_base_url (no new config key).
+    let filter_host = task_store::get_project(conn, &task.project_id)
+        .ok()
+        .and_then(|p| p.site_base_url())
+        .and_then(|base| filter_host_from_site_base_url(&base));
+
     log::info!(
-        "[collect_posthog] posthog_project_id={} events={:?} host={} task_id={}",
+        "[collect_posthog] posthog_project_id={} events={:?} api_host={} filter_host={:?} task_id={}",
         posthog_project_id,
         events,
-        host,
+        api_host,
+        filter_host,
         task.id
     );
 
     // 4. Fetch from PostHog Query API inside a dedicated runtime thread.
     let project_id_owned = posthog_project_id.clone();
     let events_owned = events.clone();
-    let host_owned = host.clone();
+    let api_host_owned = api_host.clone();
+    let filter_host_owned = filter_host.clone();
     let fetch_result = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async move {
-            let client = PosthogClient::new(
-                PosthogClientConfig::new(api_key, project_id_owned).with_host(host_owned),
-            );
+            let mut cfg =
+                PosthogClientConfig::new(api_key, project_id_owned).with_host(api_host_owned);
+            if let Some(h) = filter_host_owned {
+                cfg = cfg.with_filter_host(h);
+            }
+            let client = PosthogClient::new(cfg);
+            let window_days = client.window_days();
             let rows = client
                 .fetch_all_events(&events_owned)
                 .await
                 .map_err(crate::error::Error::Other)?;
-            Ok::<_, crate::error::Error>(rows)
+            Ok::<_, crate::error::Error>((rows, window_days))
         })
     })
     .join();
 
-    let rows = match fetch_result {
+    let (rows, window_days) = match fetch_result {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
             let msg = e.to_string();
@@ -119,7 +132,7 @@ pub fn exec_collect_posthog(task: &Task, project_path: &str, conn: &Connection) 
     let exported_at = chrono::Utc::now().to_rfc3339();
     let today = chrono::Utc::now().date_naive();
 
-    log::info!("[collect_posthog] fetched {} rows", rows.len());
+    log::info!("[collect_posthog] fetched {} rows (window_days={})", rows.len(), window_days);
 
     // 5. Store rows in SQLite (INSERT OR IGNORE).
     let inserted = match db::insert_rows(conn, &task.project_id, &rows) {
@@ -135,13 +148,13 @@ pub fn exec_collect_posthog(task: &Task, project_path: &str, conn: &Connection) 
         log::warn!("[collect_posthog] failed to prune old rows: {e}");
     }
 
-    // 7. Write collection artifact.
+    // 7. Write collection artifact — meta.days from client window_days (single source).
     let collection = PosthogCollection {
         meta: PosthogCollectionMeta {
             project_id: task.project_id.clone(),
             posthog_project_id: posthog_project_id.clone(),
             exported_at: exported_at.clone(),
-            days: WINDOW_DAYS,
+            days: window_days,
             events: events.clone(),
             rows: rows.len(),
         },

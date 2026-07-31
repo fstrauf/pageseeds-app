@@ -305,7 +305,7 @@ Enforcement points (do not bypass or re-implement):
 | `fix-submit` `kind=content` success | Yes | Synthetic `path-b-fix-content:{project}:{slug}` |
 | `fix-submit` `kind=ctr` success | **No** — `ctr_outcomes` change event only | — |
 
-Shared helper: `post_actions::spawn_content_outcome_review_for_slug`. Do **not** call full `after_task_success` from Path B. Re-submit is idempotent via `content_outcome_review:{project}:{parent_id}:{slug}`.
+Shared helper: `post_actions::spawn_content_outcome_review_for_slug`. Do **not** call full `after_task_success` from Path B. Re-submit is idempotent via `content_outcome_review:{project}:{slug}` (project + slug, not parent_id — issue #302).
 
 ---
 

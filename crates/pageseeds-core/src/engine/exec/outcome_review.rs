@@ -109,7 +109,7 @@ pub fn page_matches_slug(page_url: &str, slug: &str) -> bool {
 /// Evidence only — does **not** change GSC-led classification thresholds.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ConversionEvidence {
-    /// `"ok"` | `"insufficient_data"` | `"missing"`
+    /// `"ok"` | `"insufficient_data"` | `"missing"` | `"error"` (DB failure; not absent tape)
     pub status: &'static str,
     pub days_with_data: i64,
     pub events: std::collections::HashMap<String, f64>,
@@ -119,6 +119,15 @@ impl ConversionEvidence {
     pub fn missing() -> Self {
         Self {
             status: "missing",
+            days_with_data: 0,
+            events: std::collections::HashMap::new(),
+        }
+    }
+
+    /// DB failure — distinct from absent tape (`missing`) so operators can tell them apart (#319).
+    pub fn error() -> Self {
+        Self {
+            status: "error",
             days_with_data: 0,
             events: std::collections::HashMap::new(),
         }
@@ -158,7 +167,12 @@ pub fn conversion_window_for_slug(
 ) -> ConversionEvidence {
     let pages = match crate::posthog::db::list_pages(conn, project_id) {
         Ok(p) => p,
-        Err(_) => return ConversionEvidence::missing(),
+        Err(e) => {
+            log::warn!(
+                "[content_outcome] list_pages failed for project {project_id}: {e}"
+            );
+            return ConversionEvidence::error();
+        }
     };
     let matching: Vec<String> = pages
         .into_iter()
@@ -175,7 +189,12 @@ pub fn conversion_window_for_slug(
         end_date,
     ) {
         Ok((days, events)) => ConversionEvidence::from_window(days, events),
-        Err(_) => ConversionEvidence::missing(),
+        Err(e) => {
+            log::warn!(
+                "[content_outcome] window_event_totals failed for project {project_id} slug {slug}: {e}"
+            );
+            ConversionEvidence::error()
+        }
     }
 }
 

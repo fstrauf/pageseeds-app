@@ -200,7 +200,7 @@ Product boundaries for agents and operators (epic [#202](https://github.com/fstr
 
 | Non-goal | Truth in product |
 |---|---|
-| **Outcomes** | **GSC** owns post-ship demand outcomes (`gsc_page_daily`, desk tools: `site-overview` / `articles` / `gsc-*` / `ctr-outcomes`). Content closed-loop = system `content_outcome_review` (GSC windows + optional PostHog conversion evidence from `posthog_page_daily` when `collect_posthog` has run). CTR closed-loop = free `ctr-outcomes` CLI (no task fan-out). Not paid position APIs. |
+| **Outcomes** | **GSC** owns post-ship demand outcomes (`gsc_page_daily`, desk tools: `site-overview` / `articles` / `gsc-*` / `ctr-outcomes`). Content closed-loop = system `content_outcome_review` (GSC windows + optional PostHog conversion evidence from `posthog_page_daily` when `collect_posthog` has run). CTR closed-loop = free `ctr-outcomes` CLI (no task fan-out) — may hit the **network** for live title verification when classifying ready rows (`engine/exec/ctr_audit/outcome.rs`). Not paid position APIs. |
 | **SERP / DataForSEO** | Research, winnability, optional diagnostics only — cost-capped (`serp_guard`). **Never** weekly outcome ground truth. |
 | **Link building / outreach / competitor backlink acquisition** | Human/PR process **outside** the product. No task type. Do not invent weekly hard actions for it. Only automated off-site path is Reddit (`reddit_opportunity_search`) when configured. |
 | **Continuous competitive rank tracker** (Accuranker-class) | **Not** in product and **not** planned in epic #202. |
