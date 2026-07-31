@@ -136,6 +136,10 @@ pub struct MergeSubmitResult {
     pub keep_url: Option<String>,
     pub redirect_urls: Vec<String>,
     pub redirects_written: bool,
+    /// Loud operator warning when redirects.csv is gitignored / uncommittable.
+    /// Write still succeeds; operator must commit or port rules to deploy config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirects_warning: Option<String>,
     pub inbound_links_rewritten: usize,
     pub sources_depublished: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -441,6 +445,7 @@ pub fn submit_merge(
             keep_url: Some(keep_url),
             redirect_urls,
             redirects_written: false,
+            redirects_warning: None,
             inbound_links_rewritten: 0,
             sources_depublished: 0,
             consolidate_task_id: bound_task.as_ref().map(|t| t.id.clone()),
@@ -461,6 +466,7 @@ pub fn submit_merge(
     // 6. Write/merge redirects.csv
     merge_apply::upsert_redirects_csv(project_path, &keep_url, &redirect_urls)?;
     let redirects_written = true;
+    let redirects_warning = merge_apply::redirects_gitignore_warning(project_path);
 
     // 7. Rewrite inbound links (fail-closed if content dir missing)
     let (inbound_links_rewritten, _) =
@@ -531,6 +537,7 @@ pub fn submit_merge(
         keep_url: Some(keep_url),
         redirect_urls,
         redirects_written,
+        redirects_warning,
         inbound_links_rewritten,
         sources_depublished,
         consolidate_task_id,

@@ -146,6 +146,8 @@ pub struct SyncValidateResult {
     pub orphan_files: Vec<String>,
     pub malformed_file_refs: Vec<SyncIssue>,
     pub duplicate_file_refs: Vec<SyncIssue>,
+    /// Files that share the same numeric prefix (e.g. `189_a.mdx` + `189_b.mdx`).
+    pub duplicate_prefixes: Vec<SyncIssue>,
     pub date_mismatches: Vec<SyncIssue>,
     pub dates_synced: usize,
     pub fixable_mismatches: usize,
@@ -248,6 +250,35 @@ pub fn sync_and_validate(
                     .map(|n| (n.to_string(), p.clone()))
             })
             .collect();
+
+    // 3b. Detect duplicate numeric prefixes across content files
+    // (e.g. 189_a.mdx and 189_b.mdx both claim id 189).
+    let mut prefix_to_files: HashMap<i64, Vec<String>> = HashMap::new();
+    for name in content_files.keys() {
+        if let Some(id) = crate::content::naming::parse_numeric_prefix(name) {
+            prefix_to_files.entry(id).or_default().push(name.clone());
+        }
+    }
+    let mut duplicate_prefixes: Vec<SyncIssue> = Vec::new();
+    let mut prefix_ids: Vec<i64> = prefix_to_files.keys().copied().collect();
+    prefix_ids.sort_unstable();
+    for id in prefix_ids {
+        let files = prefix_to_files.get_mut(&id).unwrap();
+        if files.len() < 2 {
+            continue;
+        }
+        files.sort();
+        let joined = files.join(", ");
+        duplicate_prefixes.push(SyncIssue {
+            id: None,
+            title: None,
+            file: Some(joined.clone()),
+            issue_type: "duplicate_prefix".into(),
+            detail: format!(
+                "numeric prefix {id} is used by multiple files: {joined}"
+            ),
+        });
+    }
 
     // 4. Cross-reference articles against content files.
     let mut seen: HashSet<String> = HashSet::new();
@@ -356,7 +387,9 @@ pub fn sync_and_validate(
     let mut orphan_files: Vec<String> = remaining.into_iter().collect();
     orphan_files.sort();
 
-    let next_action = if !missing_files.is_empty() {
+    let next_action = if !duplicate_prefixes.is_empty() {
+        "Resolve duplicate numeric prefixes in content filenames"
+    } else if !missing_files.is_empty() {
         "Fix missing content files referenced by articles.json"
     } else if !malformed_file_refs.is_empty() {
         "Fix malformed file references in articles.json"
@@ -386,6 +419,7 @@ pub fn sync_and_validate(
         orphan_files,
         malformed_file_refs,
         duplicate_file_refs,
+        duplicate_prefixes,
         date_mismatches,
         dates_synced,
         fixable_mismatches,
@@ -1591,6 +1625,51 @@ fn collect_route_patterns(repo_root: &Path) -> Vec<RoutePattern> {
             mdx_content.contains("2026-04-28"),
             "sync_and_validate should patch MDX with the SQLite date (2026-04-28), not the stale JSON date. MDX content: {}",
             mdx_content
+        );
+    }
+
+    #[test]
+    fn sync_and_validate_reports_duplicate_numeric_prefixes() {
+        let dir = unique_temp_dir("ps_dup_prefix");
+        let auto_dir = dir.join(".github").join("automation");
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+
+        write_seo_workspace_json(&auto_dir, "content");
+        write_articles_json(
+            &auto_dir,
+            r#"{"nextArticleId":1,"articles":[]}"#,
+        );
+        // Two files sharing numeric prefix 189.
+        write_mdx(&content_dir.join("189_a.mdx"), "A", "2026-01-01");
+        write_mdx(&content_dir.join("189_b.mdx"), "B", "2026-01-02");
+
+        let conn = in_memory_db();
+        setup_test_project(&conn, "p1", &dir);
+
+        let result = sync_and_validate(&auto_dir, &dir, false, &conn, "p1").unwrap();
+        assert_eq!(
+            result.duplicate_prefixes.len(),
+            1,
+            "expected one duplicate_prefix issue, got {:?}",
+            result.duplicate_prefixes
+        );
+        let issue = &result.duplicate_prefixes[0];
+        assert_eq!(issue.issue_type, "duplicate_prefix");
+        assert!(
+            issue.detail.contains("189"),
+            "detail should name the prefix: {}",
+            issue.detail
+        );
+        assert!(
+            issue.detail.contains("189_a.mdx") && issue.detail.contains("189_b.mdx"),
+            "detail should name both files: {}",
+            issue.detail
+        );
+        assert!(
+            result.next_action.contains("duplicate numeric prefixes"),
+            "next_action should call out duplicates: {}",
+            result.next_action
         );
     }
 }

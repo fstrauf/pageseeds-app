@@ -6,6 +6,8 @@
 //! required to satisfy the new module boundary; the function bodies are
 //! byte-for-byte identical to the pre-move source.
 
+use std::collections::HashSet;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NumberedMdxStyle {
     pub(crate) next_id: i64,
@@ -47,13 +49,33 @@ pub(crate) fn detect_numbered_mdx_style(dir: &std::path::Path) -> Option<Numbere
     }
 }
 
-fn parse_numeric_prefix(filename: &str) -> Option<i64> {
+/// Parse a leading `{digits}_` numeric prefix from a markdown filename.
+///
+/// Shared by numbered-style path allocation and sync duplicate-prefix checks.
+pub(crate) fn parse_numeric_prefix(filename: &str) -> Option<i64> {
     let prefix = filename.split_once('_')?.0;
     if prefix.chars().all(|c| c.is_ascii_digit()) {
         prefix.parse::<i64>().ok()
     } else {
         None
     }
+}
+
+/// Scan `dir` once and return every numeric prefix already used by a markdown
+/// file (e.g. `189_other.mdx` occupies id 189 regardless of slug).
+///
+/// Single source of truth for prefix occupancy: both [`next_article_path`] and
+/// [`rename_new_files_to_numbered_mdx`] consult this set so allocation never
+/// collides with an existing `{id}_*` file under a different stem.
+fn occupied_numeric_prefixes(dir: &std::path::Path) -> HashSet<i64> {
+    crate::content::locator::collect_markdown_files(dir)
+        .into_iter()
+        .filter_map(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(parse_numeric_prefix)
+        })
+        .collect()
 }
 
 fn normalize_slug_underscored(stem: &str) -> String {
@@ -81,10 +103,12 @@ fn normalize_slug_underscored(stem: &str) -> String {
 
 /// Compute the exact target path for a new article file, fully deterministically.
 ///
-/// With an established numbered style the file is `{next_id}_{slug}.mdx`,
-/// incrementing past any occupied id (mirrors the collision loop in
-/// [`rename_new_files_to_numbered_mdx`]). Without a numbered style the file is
-/// `{slug}.mdx`, with a numeric suffix appended if that name is taken.
+/// With an established numbered style the file is `{next_id}_{slug}.mdx`.
+/// Prefix occupancy is the single invariant: any existing markdown file whose
+/// name starts with `{id}_` occupies that id (regardless of slug), and
+/// allocation walks `next_id` upward until a free id is found. Without a
+/// numbered style the file is `{slug}.mdx`, with a numeric suffix appended if
+/// that name is taken.
 ///
 /// Used both to tell the agent the exact path to write (prompt directive) and
 /// by the executor when it must persist returned MDX content itself.
@@ -96,14 +120,12 @@ pub(crate) fn next_article_path(
     let slug = normalize_slug_underscored(stem);
     match style {
         Some(style) => {
+            let occupied = occupied_numeric_prefixes(dir);
             let mut next_id = style.next_id;
-            loop {
-                let candidate = dir.join(format!("{}_{}.mdx", next_id, slug));
-                if !candidate.exists() {
-                    break candidate;
-                }
+            while occupied.contains(&next_id) {
                 next_id += 1;
             }
+            dir.join(format!("{}_{}.mdx", next_id, slug))
         }
         None => {
             let mut candidate = dir.join(format!("{}.mdx", slug));
@@ -124,6 +146,9 @@ pub(crate) fn rename_new_files_to_numbered_mdx(
 ) -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
     let mut renamed = Vec::new();
     let mut next_id = start_id;
+    // Shared occupancy set with next_article_path. Insert each allocated id so
+    // later renames in this same pass cannot reuse it.
+    let mut occupied = occupied_numeric_prefixes(dir);
 
     for path in crate::content::locator::collect_markdown_files(dir) {
         // Rename only newly created files from this run, not existing repo files.
@@ -153,15 +178,13 @@ pub(crate) fn rename_new_files_to_numbered_mdx(
             .unwrap_or("article");
         let slug = normalize_slug_underscored(stem);
 
-        let target = loop {
-            let candidate = dir.join(format!("{}_{}.mdx", next_id, slug));
-            if !candidate.exists() {
-                break candidate;
-            }
+        while occupied.contains(&next_id) {
             next_id += 1;
-        };
+        }
+        let target = dir.join(format!("{}_{}.mdx", next_id, slug));
 
         if std::fs::rename(&path, &target).is_ok() {
+            occupied.insert(next_id);
             renamed.push((path, target));
             next_id += 1;
         }
@@ -236,6 +259,8 @@ pub(crate) fn rename_new_or_modified_md_to_mdx(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::time::SystemTime;
 
     fn temp_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -265,6 +290,22 @@ mod tests {
     }
 
     #[test]
+    fn next_article_path_skips_prefix_occupied_by_different_slug() {
+        // 189_other.mdx occupies prefix 189; asking for slug "something" at
+        // next_id 189 must not return 189_something.mdx.
+        let dir = temp_dir();
+        std::fs::write(dir.join("189_other.mdx"), "x").unwrap();
+        let path = next_article_path(
+            &dir,
+            Some(NumberedMdxStyle { next_id: 189 }),
+            "something",
+        );
+        assert_eq!(path, dir.join("190_something.mdx"));
+        assert_ne!(path, dir.join("189_something.mdx"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn next_article_path_without_style_suffixes_collisions() {
         let dir = temp_dir();
         std::fs::write(dir.join("gamma_scalping.mdx"), "x").unwrap();
@@ -278,6 +319,49 @@ mod tests {
         let dir = temp_dir();
         let path = next_article_path(&dir, None, "!!!");
         assert_eq!(path, dir.join("article.mdx"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_new_files_skips_prefix_occupied_by_different_slug() {
+        // Existing 189_other.mdx occupies 189; a new unnumbered file must not
+        // be renamed to 189_something.mdx under exact-path-only collision.
+        let dir = temp_dir();
+        std::fs::write(dir.join("189_other.mdx"), "existing").unwrap();
+        let new_path = dir.join("something.mdx");
+        std::fs::write(&new_path, "new").unwrap();
+
+        // Snapshot pretends only the numbered file existed before the run.
+        let mut before: HashMap<std::path::PathBuf, SystemTime> = HashMap::new();
+        let mtime = std::fs::metadata(dir.join("189_other.mdx"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        before.insert(dir.join("189_other.mdx"), mtime);
+
+        let renamed = rename_new_files_to_numbered_mdx(&dir, &before, 189);
+        assert_eq!(renamed.len(), 1);
+        assert_eq!(renamed[0].0, new_path);
+        assert_eq!(renamed[0].1, dir.join("190_something.mdx"));
+        assert!(!dir.join("189_something.mdx").exists());
+        assert!(dir.join("190_something.mdx").exists());
+        assert!(dir.join("189_other.mdx").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_new_files_same_pass_does_not_reuse_allocated_ids() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("alpha.mdx"), "a").unwrap();
+        std::fs::write(dir.join("beta.mdx"), "b").unwrap();
+        let before: HashMap<std::path::PathBuf, SystemTime> = HashMap::new();
+
+        let renamed = rename_new_files_to_numbered_mdx(&dir, &before, 10);
+        assert_eq!(renamed.len(), 2);
+        let targets: HashSet<_> = renamed.iter().map(|(_, t)| t.clone()).collect();
+        assert_eq!(targets.len(), 2, "two renames must receive distinct ids");
+        assert!(targets.contains(&dir.join("10_alpha.mdx")) || targets.contains(&dir.join("10_beta.mdx")));
+        assert!(targets.contains(&dir.join("11_alpha.mdx")) || targets.contains(&dir.join("11_beta.mdx")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
