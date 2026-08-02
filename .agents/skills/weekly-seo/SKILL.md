@@ -60,7 +60,7 @@ source yourself.
 
 | Role | Workspace | May write |
 |------|-----------|-----------|
-| **This skill** | Customer project / neutral cwd | Weekly report + **narrow** `seo_program.yaml` queue/status updates (see below) |
+| **This skill** | Customer project / neutral cwd | Weekly report MD + outcome sidecar JSON pair + **narrow** `seo_program.yaml` queue/status updates (see hard rail #8) |
 | **pageseeds-cli** | N/A (binary on PATH) | Tasks/DB/content **via tools only** |
 | **Product engineer** | `pageseeds-app` (separate session) | App source / PRs |
 | **Program rebalance** | Customer project via `/seo-program-review` | Full `seo_program.yaml` + strategy `project.yaml` |
@@ -109,14 +109,14 @@ Breaking these fails the run.
 
 | # | Rule |
 |---|------|
-| 1 | **CLI only** for data/tasks, **except** PostHog MCP desk + allowed automation file writes (weekly report; narrow `seo_program.yaml` statuses). No direct DB writes, no hand-editing MDX. No PostHog CLI wrap — MCP is the integration. |
+| 1 | **CLI only** for data/tasks, **except** PostHog MCP desk + allowed automation file writes (weekly report MD; outcome sidecar JSON pair; narrow `seo_program.yaml` statuses). No direct DB writes, no hand-editing MDX. No PostHog CLI wrap — MCP is the integration. |
 | 2 | **No product source edits** under `pageseeds-app` product crates (unless explicitly requested). |
 | 3 | **Missing capability → escalate**, don’t implement. Document gap; work around or stop that branch. |
 | 4 | **Budgets:** ≤**5** creates · ≤**15** executions · ≤**3** new articles from keyword selection. |
 | 5 | **May-create list only** (below). Never `create-task` for `write_article`, `create_landing_page`, `create_hub_page`, `consolidate_cluster` — those come from selection after review. Path B write uses `write-context` / `write-submit`; Path B merge uses `merge-context` / `merge-submit`; Path B fix uses `fix-context` / `fix-submit`. |
 | 6 | **Evidence:** every task / major finding cites tool output (counts, slugs, URLs). |
 | 7 | **Reviews:** mechanical only; escalate judgment (high-traffic merges, strategic keywords). |
-| 8 | **File writes:** (a) `weekly_seo_{YYYYMMDD_HHMMSS}.md` under automation; (b) **narrow** updates to `seo_program.yaml` only — queue item `status` / `target_slug` / short `notes` when you ship or claim work. **Do not** rewrite goal, metrics, mode mix, or invent Primary keywords mid-weekly (that is `/seo-program-review`). |
+| 8 | **File writes:** under `<project>/.github/automation/` only: (a) `weekly_seo_{YYYYMMDD_HHMMSS}.md`; (b) `weekly_outcome_{YYYYMMDD_HHMMSS}.json` + `weekly_outcome_latest.json` (same timestamp as the MD when possible; overwrite latest); (c) **narrow** updates to `seo_program.yaml` only — queue item `status` / `target_slug` / short `notes` when you ship or claim work. **Do not** rewrite goal, metrics, mode mix, or invent Primary keywords mid-weekly (that is `/seo-program-review`). Outcome JSON is written from **classified decisions this run** (not by parsing the MD after write). Spacing refusal with **no** report write → **do not** invent an outcome file. |
 | 9 | **Missing integrations:** GSC/Clarity/Reddit fail → degrade and say so; never fake data. |
 | 10 | **PostHog desk is default:** after GSC shortlist, run the light PostHog desk via MCP. **Only** source for project id: `project.yaml` → `posthog_project_id`. Assume MCP exists. If MCP missing, auth fails, or `posthog_project_id` absent → **WARN** in report + final message, continue on GSC only — no name/host guessing, no skill-side map, never invent engagement numbers. |
 | 11 | **Program mode:** When `seo_program.yaml` exists, lock **Mode** from `current_mode` (unless user forces another mode) and prefer draining open program queues (primary / harvest / tools / **prune**) over pure desk noise. Missing file → desk-default + note gap. **Never execute noindex** from `prune_queue` — surface under Needs your decision only. |
@@ -309,14 +309,16 @@ must execute before inventing new soft work.
 ## Soft guidance (default path)
 
 ```text
-Phase 0 spacing gate → load seo_program.yaml (mode + queues incl. optional prune)
+Phase 0 spacing gate → Phase 0.5 prior outcome recheck
+  → load seo_program.yaml (mode + queues incl. optional prune)
   → due content_outcome_review (≤1–2; non-compliant only if due≥1 and zero executed; rest deferred under cap; “none due” if filter empty)
   → due gsc_indexing_outcome_review (≤1–2; same cap / compliance pattern as content_outcome_review)
   → refresh ground truth (if stale) → site-overview
   → articles / article / gsc-queries
   → optional striking-distance filter (when pos 7–13 inventory looks high-ROI)
   → PostHog desk (default — project.yaml posthog_project_id → switch-project; WARN if missing)
-  → plan within Mode (+ optional prune drain side-pass) → ≤5 actions → update queue statuses (incl. measuring→done) → report
+  → plan within Mode (+ optional prune drain side-pass) → ≤5 actions → update queue statuses (incl. measuring→done)
+  → report MD + outcome sidecar JSON pair
 ```
 
 Reorder/deepen when a clear anomaly appears (including optional
@@ -334,7 +336,7 @@ Theme gates (Primary, ACTIVE/MAINTAIN/LEGACY, `do_not_expand`) remain in
 `project.yaml` / `pageseeds-cli strategy` — the program file does **not** replace
 them. It sequences **mode + queues** so weekly runs do not freestyle every time.
 
-#### Load (after Phase 0 spacing gate, before desk deep-dive)
+#### Load (after Phase 0 spacing + Phase 0.5 prior outcome recheck, before desk deep-dive)
 
 1. Read `seo_program.yaml` if present (`schema_version`, `goal`, `current_mode`,
    `mode_mix_this_month`, `primary_backlog`, `harvest_queue`, `tools_queue`,
@@ -491,6 +493,37 @@ pageseeds-cli list-tasks -i <id> -p <path>
   clear; spacing can refuse even when open-task count is low.
 - Override for load: same “run anyway” / “force weekly” family; log under
   Decisions.
+
+### A.5 Phase 0.5 — prior outcome recheck
+
+**After** Phase 0 spacing (when you are allowed to proceed — mode-executing,
+measure-only, or override) and **before** inventing growth work / desk
+deep-dive for new work. Hard rail: do **not** re-list last week’s open
+operator decisions as fresh **Needs your decision** without rechecking.
+
+```text
+if weekly_outcome_latest.json exists:
+  for each decision with status open|watching:
+    recheck with CLI evidence when cheap
+      (list-tasks for related_task_ids; skip inventing GSC truth without tools)
+    → done | dropped | still open | watching
+  carry surviving opens into this run’s outcome (update notes if rechecked)
+  do NOT re-list as fresh Needs-your-decision without recheck
+```
+
+| Rule | Detail |
+|------|--------|
+| **Path** | `<project-path>/.github/automation/weekly_outcome_latest.json` |
+| **Missing file** | No-op — legacy MD-only projects; continue without prior decisions |
+| **Statuses to recheck** | `open` and `watching` only; leave `done` / `deferred` / `dropped` alone |
+| **Cheap recheck** | `list-tasks` / `get-task` on `related_task_ids`; note queue/YAML row changes; do **not** invent GSC or deploy truth without tool output |
+| **Recheck outcomes** | `done` (resolved), `dropped` (no longer relevant), still `open`, or `watching` (external lag continues) |
+| **Carry-forward** | Surviving `open` / `watching` rows go into **this** run’s outcome JSON (same `id` when still the same decision; refresh `pending` / `guidance` if rechecked) |
+| **Report honesty** | Prior opens that remain open appear under **Needs your decision** only after recheck; prior `waiting` under **Watching / waiting** |
+
+Phase 0.5 does **not** replace due outcome-review execution (still run those
+early per soft path). It only reloads the **decision ledger** from the last
+sidecar so weekly handoffs stay continuous.
 
 #### Due `content_outcome_review`
 
@@ -1090,6 +1123,99 @@ operator runbook: `.agents/skills/video-clip/SKILL.md`.
 
 ## F. Report
 
+Write **three** files under `<project-path>/.github/automation/` after every
+**successful** report write (same `YYYYMMDD_HHMMSS` when possible):
+
+| File | Role |
+|------|------|
+| `weekly_seo_{ts}.md` | Human narrative + spacing clock |
+| `weekly_outcome_{ts}.json` | Machine handoff (schema v1) |
+| `weekly_outcome_latest.json` | Overwrite pointer to this run’s outcome |
+
+- **Measure-only** reports still write the outcome JSON pair (`measure_only: true`).
+- Spacing refusal with **no** MD report → **do not** invent outcome files.
+- Build outcome JSON from **classified decisions this run** (plus carried
+  Phase 0.5 survivors) — **not** by parsing the MD after write.
+- Keep the MD human-readable; **do not** dump full JSON in the final chat message.
+
+### Typed decisions → report sections
+
+| Kind | Meaning | Report section |
+|------|---------|----------------|
+| `operator_act` | Mechanical / nearly-mechanical CLI work | **Needs your decision** only |
+| `operator_confirm` | Human yes required (noindex, high-traffic merge `-y`) | **Needs your decision** only |
+| `waiting` | External lag (GSC, deploy); prefer `expires_at` default run_date+28d | **Watching / waiting** |
+| `product_gap` | Eng / product change | **Product / CLI gaps** |
+| `optional_backlog` | Nice later | Optional backlog bullets under Recommended or Skipped |
+
+Decision `status`: `open | watching | done | deferred | dropped`.
+
+Every decision row needs a stable **`id`**:
+`{project_id}-{YYYYMMDD}-{slug-title}` (e.g. `coffee-20260728-diagnostics-fanout`),
+plus `kind`, `status`, `pending`, `guidance`, optional `commands[]`,
+`related_task_ids`, `related_slugs`, `not_before`, `expires_at` (for `waiting`),
+`source_report`.
+
+**Outcome top-level `status`:** `needs_attention` **iff** any decision has
+`status=open` and `kind` in `{operator_act, operator_confirm}`; else `ok`.
+
+**`followup_prompt`:** built from **open** `operator_act` + `operator_confirm`
+first (commands + pending one-liners); optional trailing note that full outcome
+JSON has waiting/product rows.
+
+### Outcome sidecar schema v1 (epic #326)
+
+Path: `weekly_outcome_latest.json` (+ timestamped twin). Example shape:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "weekly_seo_outcome",
+  "project_id": "coffee",
+  "project_name": "Brewedlate",
+  "generated_at": "2026-07-28T18:31:04Z",
+  "report_path": "…/.github/automation/weekly_seo_20260728_183104.md",
+  "report_date": "2026-07-28",
+  "status": "needs_attention",
+  "mode": "harvest",
+  "measure_only": false,
+  "summary": "TL;DR of the run",
+  "headline": "optional short bar line",
+  "measures": [
+    {
+      "measure": "…",
+      "evidence": "…",
+      "task": "…",
+      "outcome": "…",
+      "task_ids": []
+    }
+  ],
+  "decisions": [
+    {
+      "id": "coffee-20260728-diagnostics-fanout",
+      "title": "Diagnostics fan-out (50 tasks)",
+      "kind": "operator_act",
+      "status": "open",
+      "pending": "…",
+      "guidance": "…",
+      "commands": [],
+      "related_task_ids": [],
+      "related_slugs": [],
+      "not_before": null,
+      "expires_at": null,
+      "source_report": "weekly_seo_20260728_183104.md"
+    }
+  ],
+  "recommended_next": [],
+  "posthog_warn": false,
+  "followup_prompt": "Continue from last weekly SEO run…"
+}
+```
+
+Fixture: [docs/examples/weekly_outcome_example.json](../../../docs/examples/weekly_outcome_example.json).
+
+### MD report template
+
 `<project-path>/.github/automation/weekly_seo_{YYYYMMDD_HHMMSS}.md`
 
 ```markdown
@@ -1098,6 +1224,7 @@ operator runbook: `.agents/skills/video-clip/SKILL.md`.
 **Date:** {ISO timestamp}
 **Mode:** {A Attract | B Harvest | C Tools | D Measure} — source: seo_program.yaml `current_mode`={…} | user override | desk-default (file missing)
 **Measure-only:** yes|no
+**Outcome:** weekly_outcome_{ts}.json (+ weekly_outcome_latest.json)
 
 ## Summary
 2–3 sentences: biggest finding and what was done (tie to mode/queues).
@@ -1107,6 +1234,7 @@ operator runbook: `.agents/skills/video-clip/SKILL.md`.
 - Queues touched: primary/harvest/tools/prune rows claimed or status-updated
 - Prune: merge_into drained (n) / noindex surfaced for decision (n)
 - last_reviewed_at / stale review warning if any
+- Phase 0.5: prior outcome rechecked (n open/watching) | no prior outcome
 
 ## Exploration path
 Desk path chased, detours, what you skipped (and why).
@@ -1122,6 +1250,7 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 ## Measures taken
 | Measure | Evidence | Task | Outcome |
 - Call out **striking-distance** picks explicitly when used (slug + avg_position + impressions + why this action).
+- Mirror into outcome JSON `measures[]` (with `task_ids` when known).
 
 ## Movement since last run
 - **Outcome reviews:** executed (slug + classification: improved/regressed/neutral/insufficient_data from executor) **or** explicit “none due” (post-`not_before` filter). **Non-compliant only if** ≥1 due and zero executed. Due beyond the ≤1–2 cap → list as **deferred under cap** (compliant).
@@ -1139,9 +1268,19 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 (Spacing overrides — “run anyway” / “force weekly” — must appear here as one line.)
 
 ## Needs your decision
-| Task | What's pending | Command to resolve |
-- Include open prune `noindex` rows (slug + evidence + `confirm: required`) —
-  operator-manual only; never agent-executed.
+| id / kind | Task | What's pending | Command to resolve |
+- **Only** `operator_act` and `operator_confirm` (status `open`).
+- Include kind + stable `id` when helpful.
+- Include open prune `noindex` rows as `operator_confirm` (slug + evidence +
+  `confirm: required`) — operator-manual only; never agent-executed.
+- High-traffic merge `-y` confirmations = `operator_confirm`.
+- Do **not** put `waiting` / `product_gap` / `optional_backlog` here.
+
+## Watching / waiting
+| id | What's lagging | expires_at | Notes |
+- `waiting` decisions only (GSC lag, deploy, future `not_before`, etc.).
+- Prefer `expires_at` = run_date + 28d when unknown.
+- May also note under Skipped when thin.
 
 ## Queued, not yet run
 …
@@ -1154,8 +1293,10 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 - Striking-distance candidates seen but not acted on (and why — budget, better lever, stale tape, thin evidence).
 - Future `not_before` `content_outcome_review` rows left for later (do not execute early).
 - Due `content_outcome_review` beyond the ≤1–2 cap → **deferred under cap** (compliant; not non-compliance).
+- Optional: `optional_backlog` bullets that are not Recommended this week.
 
 ## Product / CLI gaps (if any)
+- Map to decision kind `product_gap` in outcome JSON.
 - Real product/CLI gaps only (missing tools, auth). Desk tape refresh is
   `collect_gsc` + execute — not blocked on a `refresh_ground_truth` product.
 - PostHog MCP missing or missing `posthog_project_id` → **WARN** and fix
@@ -1164,7 +1305,7 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
   for live ranking.
 
 ## Recommended next actions
-…
+- Optional backlog (`optional_backlog`) may appear as bullets here when still useful.
 
 ## Optional video (if any)
 - Candidate slug + why (or “none — default 0” / config missing).
@@ -1188,14 +1329,19 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 **Decisions I made for you**
 - …
 
-**Needs your decision**
+**Needs your decision** ({N} need you — open operator_act + operator_confirm only)
 - … → `command`
+
+**Watching / waiting** (n) — one line each if any
 
 **Queued, not yet run** (n)
 - …
 
-**Report:** {path}
+**Report:** {path to weekly_seo_*.md}
+**Outcome:** {path to weekly_outcome_latest.json} (status=ok|needs_attention; {N} need you)
 ```
+
+Do **not** paste the full outcome JSON into chat. Path + counts are enough.
 
 ---
 
@@ -1219,9 +1365,11 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 - **PostHog default desk:** light engagement via MCP after GSC shortlist; **only** `project.yaml` `posthog_project_id` → `switch-project`; missing id or MCP → **WARN** + GSC-only (no fallbacks); GSC = demand authority; never invent data; no CLI wrap.  
 - Evidence required; no invented data; no illegal create-task types.  
 - Soft clusters **not** ground truth / merge authority.  
-- Mechanical reviews only; file writes = weekly report + narrow `seo_program.yaml` status updates.  
+- Mechanical reviews only; file writes = weekly MD report + outcome sidecar JSON pair (`weekly_outcome_{ts}.json` + `weekly_outcome_latest.json`) + narrow `seo_program.yaml` status updates.  
+- **Typed decisions** in outcome JSON (`operator_act` / `operator_confirm` / `waiting` / `product_gap` / `optional_backlog`); top-level `needs_attention` only when open operator kinds exist.  
+- **Phase 0.5** rechecks prior `weekly_outcome_latest.json` opens/watching before re-listing Needs your decision.  
 - **Program mode** from `seo_program.yaml` when present; missing → desk-default + note; monthly rebalance = `/seo-program-review`.  
-- Idempotent re-runs: **hard Phase 0 spacing gate** (5d on mode-executing reports; measure-only exempt; explicit override logged) + open-task load check + spawner keys.  
+- Idempotent re-runs: **hard Phase 0 spacing gate** (5d on mode-executing reports; measure-only exempt; explicit override logged) + Phase 0.5 prior outcome + open-task load check + spawner keys.  
 - **Video clips are elective via `/video-clip`**; not weekly spine / not may-create.
 
 ---
@@ -1295,3 +1443,10 @@ mode-executing `weekly_seo_*.md` filename is &lt; 5 days old. Measure-only
 passes are exempt and do not reset the clock; override requires an explicit
 user phrase logged under Decisions. weekly-seo-status surfaces **Runs (7d)** /
 cadence collapse retrospectively.
+
+**Outcome sidecar (#327 / epic #326):** after every successful weekly MD write,
+also write schema-v1 `weekly_outcome_{ts}.json` + `weekly_outcome_latest.json`
+(typed decisions, measures, `followup_prompt`). MD stays human narrative +
+spacing clock; JSON is machine handoff. Phase 0.5 rechecks prior opens/watching
+before re-listing operator decisions. Spacing refusal with no report → no
+outcome file.

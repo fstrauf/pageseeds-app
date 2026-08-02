@@ -12,8 +12,15 @@ harvest / tools / prune queues, and conversion-oriented metrics.
 | `{repo}/.github/automation/project.yaml` | Primary / clusters / `do_not_expand` / Reddit — expansion gates |
 | `{repo}/.github/automation/seo_program.yaml` | Goal, metrics, `current_mode`, queues — ops SOT |
 | `{repo}/.github/automation/project.md` | Brand / prose prompts only |
-| `weekly_seo_*.md` | Weekly run logs (snapshots, not SOT) |
+| `weekly_seo_*.md` | Weekly run logs — **human narrative** + spacing clock (snapshots, not SOT) |
+| `weekly_outcome_*.json` / `weekly_outcome_latest.json` | Weekly **machine handoff** — typed decisions, measures, `followup_prompt` (schema v1; epic #326) |
 | `seo_program_review_*.md` | Monthly rebalance reports |
+
+**Weekly dual write:** MD is for operators (readable story + Phase 0 spacing
+filename clock). Outcome JSON is for follow-up agents / status tooling
+(decisions ledger, open operator work, waiting rows). Same timestamp when
+possible; `weekly_outcome_latest.json` is overwritten each successful report.
+See [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md) § F. Report.
 
 ---
 
@@ -27,7 +34,8 @@ needs a typed shape. Freeform north-star MD re-creates silent drift
 |-------|--------|----------|
 | Theme gates | `project.yaml` | CLI hard filters + research seed order |
 | Program ops | `seo_program.yaml` | Skills: `/weekly-seo`, `/seo-program-review` |
-| Narrative | weekly / review reports | Humans |
+| Narrative | weekly / review MD reports | Humans |
+| Machine handoff | `weekly_outcome_*.json` | Follow-up agents / status tooling |
 
 No multi-quarter task type in SQLite. Skills remain the writers/SOT for
 `seo_program.yaml`. Rust **reads** `current_mode` (and a small task-type → mode
@@ -160,7 +168,7 @@ LEGACY clusters.
 
 | Skill | Cadence | Writes |
 |-------|---------|--------|
-| [weekly-seo](../.agents/skills/weekly-seo/SKILL.md) | Weekly | Report + **narrow** queue status updates on `seo_program.yaml` |
+| [weekly-seo](../.agents/skills/weekly-seo/SKILL.md) | Weekly | Report MD + outcome sidecar JSON pair + **narrow** queue status updates on `seo_program.yaml` |
 | [seo-program-review](../.agents/skills/seo-program-review/SKILL.md) | ~monthly / product shift | Full rewrite of program file + proposed `project.yaml` cluster/keyword edits + review report |
 
 Missing `seo_program.yaml`: weekly degrades to desk-default modes and **notes**
