@@ -55,12 +55,15 @@ source yourself.
 
 - Weekly per-project SEO maintenance
 - On-demand: “what should we do this week for organic traffic?”
+- **Not** for draining leftover Needs-your-decision items only — use
+  [`/weekly-seo-continue`](../weekly-seo-continue/SKILL.md) (outcome drain, no full weekly)
 
 ## Separation of concerns (mandatory)
 
 | Role | Workspace | May write |
 |------|-----------|-----------|
 | **This skill** | Customer project / neutral cwd | Weekly report MD + outcome sidecar JSON pair + **narrow** `seo_program.yaml` queue/status updates (see hard rail #8) |
+| **Continue leftovers** | Customer project via `/weekly-seo-continue` | Outcome JSON rewrite only (no mode-executing spacing MD) |
 | **pageseeds-cli** | N/A (binary on PATH) | Tasks/DB/content **via tools only** |
 | **Product engineer** | `pageseeds-app` (separate session) | App source / PRs |
 | **Program rebalance** | Customer project via `/seo-program-review` | Full `seo_program.yaml` + strategy `project.yaml` |
@@ -524,6 +527,11 @@ if weekly_outcome_latest.json exists:
 Phase 0.5 does **not** replace due outcome-review execution (still run those
 early per soft path). It only reloads the **decision ledger** from the last
 sidecar so weekly handoffs stay continuous.
+
+**Drain without a full weekly:** open `operator_act` / `operator_confirm`
+leftovers from a prior outcome can be resolved via
+[`/weekly-seo-continue`](../weekly-seo-continue/SKILL.md) (rewrites
+`weekly_outcome_latest.json` only; does **not** reset the 5-day spacing clock).
 
 #### Due `content_outcome_review`
 
@@ -1331,6 +1339,8 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 
 **Needs your decision** ({N} need you — open operator_act + operator_confirm only)
 - … → `command`
+- When {N} > 0: prefer `/weekly-seo-continue {id}` to drain leftovers — do **not**
+  re-run full `/weekly-seo` just to finish these.
 
 **Watching / waiting** (n) — one line each if any
 
@@ -1342,6 +1352,8 @@ intersect SEO candidates**. If blocked: one bold **WARN** line
 ```
 
 Do **not** paste the full outcome JSON into chat. Path + counts are enough.
+When open operator decisions remain, point the operator at
+`/weekly-seo-continue <id>` rather than another full weekly.
 
 ---
 
