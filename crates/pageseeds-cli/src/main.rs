@@ -136,6 +136,7 @@ Buy: https://pageseeds.com"
         "publish-content" => publish_content(&db.to_string_lossy(), &project_id, &require_project_path(), &args),
         "research-context" => research_context(&db.to_string_lossy(), &project_id),
         "strategy" => strategy_cmd(&require_project_path()),
+        "weekly-outcome" => weekly_outcome_cmd(&require_project_path(), &args),
         "project-config-status" => project_config_status_cmd(&require_project_path()),
         "migrate-project-config" => migrate_project_config_cmd(&require_project_path(), &args),
         "research-pull" => research_pull(&db.to_string_lossy(), &project_id, &args),
@@ -776,6 +777,21 @@ fn strategy_cmd(project_path: &str) -> Result<serde_json::Value, String> {
     let outcome =
         pageseeds_core::strategy::load_project_strategy_detailed(paths.automation_dir());
     serde_json::to_value(outcome).map_err(|e| e.to_string())
+}
+
+/// Read-only: last weekly SEO outcome JSON from automation dir.
+/// Prefer `weekly_outcome_latest.json`, else newest `weekly_outcome_*.json`.
+/// `--summary` returns a compact operator view (open decisions, counts).
+fn weekly_outcome_cmd(project_path: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let path = std::path::Path::new(project_path);
+    let loaded = pageseeds_core::engine::weekly_outcome::load_weekly_outcome(path)
+        .map_err(|e| e.to_string())?;
+    if has_flag(args, "--summary", "") {
+        let summary =
+            pageseeds_core::engine::weekly_outcome::weekly_outcome_summary(&loaded.outcome);
+        return serde_json::to_value(summary).map_err(|e| e.to_string());
+    }
+    loaded.to_cli_value().map_err(|e| e.to_string())
 }
 
 /// Read-only: project.yaml vs legacy MD readiness as JSON.
@@ -1972,6 +1988,12 @@ const TOOLS: &[ToolHelp] = &[
         section: "Audits / reports",
     },
     ToolHelp {
+        name: "weekly-outcome",
+        purpose: "Read last weekly SEO outcome JSON (or --summary for open decisions)",
+        example: "weekly-outcome -p <path> [--summary]",
+        section: "Audits / reports",
+    },
+    ToolHelp {
         name: "run-content-audit",
         purpose: "Run content audit and print result JSON",
         example: "run-content-audit -i <id> -p <path>",
@@ -2126,6 +2148,7 @@ mod tests {
             "ctr-outcomes",
             "articles",
             "article",
+            "weekly-outcome",
         ] {
             assert!(
                 names.contains(&required),
@@ -2244,7 +2267,7 @@ mod tests {
         );
         assert_eq!(
             TOOLS.len(),
-            57,
+            58,
             "TOOLS inventory size (free+paid commercial boundary + operator tier)"
         );
         assert_eq!(paid.len(), 25, "paid set size must match docs/CLI_COMMERCIAL.md");
