@@ -32,6 +32,12 @@ Deterministic package + session prose + submit gates. Operator policy lives in t
 
 Do **not** `execute-task write_article` (or nested fix/merge LLM steps) on CLI best-path when the matching package tools exist.
 
+### CLI desk / site-state tools
+
+| Tools | Status | Role |
+|---|---|---|
+| `weekly-outcome` | **Shipped** (free desk read) | Read last weekly SEO outcome JSON from `.github/automation/weekly_outcome_latest.json` (else newest `weekly_outcome_*.json`). Full document or `--summary` (open decisions + operator counts). No DB write. |
+
 ### CLI video clip tools
 
 Article → short-form vertical video ([video clip spec](./video_clip_spec.md)). Content intelligence lives in PageSeeds; rendering lives in the external engine.

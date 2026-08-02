@@ -16,6 +16,7 @@ pub mod post_actions;
 pub mod project_create;
 pub mod project_paths;
 pub mod prompts;
+pub mod weekly_outcome;
 pub mod queue;
 pub mod research_package;
 pub mod research_shortlist_refresh;

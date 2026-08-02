@@ -66,6 +66,7 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 | `indexing-status` | Indexing health snapshot |
 | `ctr-health` | CTR health snapshot |
 | `content-audit-report` | **Read existing report only** |
+| `weekly-outcome` | **Read only** — last weekly SEO outcome from `.github/automation/weekly_outcome_latest.json` (or newest `weekly_outcome_*.json`); `--summary` for open decisions |
 | `cannibalization-clusters` | **Read only** |
 | `research-shortlist` | **Read existing shortlist only** |
 | `article-quality-reviews` | Quality review list |
@@ -82,8 +83,8 @@ Meta help/version/license stay free. Setup/list/create are match-arm free tools 
 | `get-task` | Get one task |
 | `validate-article` | Validate article structure |
 
-**Free tool names (31):**  
-`list-projects`, `create-project`, `setup`, `sync-site-urls`, `site-overview`, `ctr-outcomes`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `video-clip-context`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `strategy`, `project-config-status`, `migrate-project-config`, `list-tasks`, `get-task`, `validate-article`
+**Free tool names (32):**  
+`list-projects`, `create-project`, `setup`, `sync-site-urls`, `site-overview`, `ctr-outcomes`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `video-clip-context`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `weekly-outcome`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `strategy`, `project-config-status`, `migrate-project-config`, `list-tasks`, `get-task`, `validate-article`
 
 ---
 
