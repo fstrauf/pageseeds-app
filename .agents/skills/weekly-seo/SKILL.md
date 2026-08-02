@@ -63,7 +63,7 @@ source yourself.
 | Role | Workspace | May write |
 |------|-----------|-----------|
 | **This skill** | Customer project / neutral cwd | Weekly report MD + outcome sidecar JSON pair + **narrow** `seo_program.yaml` queue/status updates (see hard rail #8) |
-| **Continue leftovers** | Customer project via `/weekly-seo-continue` | Outcome JSON rewrite only (no mode-executing spacing MD) |
+| **Continue leftovers** | Customer project via `/weekly-seo-continue` | Outcome JSON rewrite only; **hard-ban** all `weekly_seo_*.md` (no spacing MD) |
 | **pageseeds-cli** | N/A (binary on PATH) | Tasks/DB/content **via tools only** |
 | **Product engineer** | `pageseeds-app` (separate session) | App source / PRs |
 | **Program rebalance** | Customer project via `/seo-program-review` | Full `seo_program.yaml` + strategy `project.yaml` |
@@ -531,7 +531,8 @@ sidecar so weekly handoffs stay continuous.
 **Drain without a full weekly:** open `operator_act` / `operator_confirm`
 leftovers from a prior outcome can be resolved via
 [`/weekly-seo-continue`](../weekly-seo-continue/SKILL.md) (rewrites
-`weekly_outcome_latest.json` only; does **not** reset the 5-day spacing clock).
+`weekly_outcome_latest.json` only; **hard-bans** all `weekly_seo_*.md` writes
+so the 5-day spacing clock is never reset).
 
 #### Due `content_outcome_review`
 

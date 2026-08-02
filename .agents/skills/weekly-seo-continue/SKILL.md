@@ -110,7 +110,7 @@ Schema fixture:
 | 6 | Budget: small — ≤**5** exec-like ops, ≤**2** creates if a decision requires create; prefer `cancel` / `update-task-status` / `list-tasks` / `execute-task` on existing rows. |
 | 7 | After each resolved decision: set `status` to `done` / `dropped` / `deferred` / `watching` with one-line note (use `pending` / `guidance` appropriately). |
 | 8 | **Rewrite** `weekly_outcome_latest.json` (+ optional `weekly_outcome_{ts}_continue.json` archive) and refresh `followup_prompt` for remaining opens. |
-| 9 | **Spacing:** continue **does not** write a mode-executing `weekly_seo_*.md` that resets the 5-day clock. Optional short `weekly_seo_continue_{ts}.md` **or** no MD — if any MD is written, mark **measure-only / continue-only** so Phase 0 ignores it for spacing. Never write `weekly_seo_{ts}.md` without that mark. |
+| 9 | **Spacing / MD ban:** continue **never** writes any file matching `weekly_seo_*.md` (including `weekly_seo_continue_*` and labeled `weekly_seo_{ts}.md`). That glob is Phase 0 / weekly-seo-status SOT for spacing + Runs(7d); any match pollutes the clock and breaks `weekly_seo_YYYYMMDD_HHMMSS` parse. **Default and only artifacts:** outcome JSON rewrite (+ optional `_continue` archive). Prefer **no** human MD; if a log is ever needed, use a prefix **outside** that glob only — `weekly_continue_{ts}.md` — never `weekly_seo_*`. |
 | 10 | If **zero** open operator decisions: say so; optionally recheck `waiting` for expiry; exit without inventing work. |
 | 11 | `product_gap` / `optional_backlog`: **list only**; do not expand into eng implementation mid-continue. |
 
@@ -119,7 +119,7 @@ Schema fixture:
 | Ban | Do instead |
 |-----|------------|
 | Full weekly desk / soft path A–F | Outcome load → open operator drain only |
-| Mode-executing `weekly_seo_*.md` (unlabeled / growth report) | Outcome rewrite only; optional continue/measure-only MD |
+| **Any** write matching `weekly_seo_*.md` (incl. `weekly_seo_continue_*`, labeled `weekly_seo_{ts}.md`) | Outcome rewrite only (`weekly_outcome_latest.json` + optional `weekly_outcome_{ts}_continue.json`); prefer no MD; human log only as `weekly_continue_{ts}.md` if ever needed |
 | Inventing work when zero open `operator_act` / `operator_confirm` | Clean no-op message + optional waiting recheck |
 | Implementing `product_gap` mid-continue | List under Product gaps; escalate outside this skill |
 | Agent-executed noindex / bulk deindex | `operator_confirm` stays human; escalate confirm |
@@ -305,40 +305,24 @@ Update:
 Do **not** delete historical `done` / `dropped` rows from the ledger unless the
 user asks for a prune; prefer status updates in place (stable `id`).
 
-### 7. Optional continue MD (spacing-safe)
+### 7. Human log (prefer none)
 
-Default: **no** MD report.
+**Default: no MD.** Artifacts are outcome JSON only (step 6).
 
-If you write a short log, use a **non-spacing** name and mark continue-only:
+Hard ban: **never** create or overwrite any path matching
+`weekly_seo_*.md` under automation (including `weekly_seo_continue_*` and
+any labeled `weekly_seo_{ts}.md`). Phase 0 / weekly-seo-status treat that
+glob as the spacing clock and Runs(7d) source; continue must not pollute it.
+
+If a human narrative is ever required (rare; user explicitly asks), use a
+prefix **outside** that glob:
 
 ```text
-{project}/.github/automation/weekly_seo_continue_{YYYYMMDD_HHMMSS}.md
+{project}/.github/automation/weekly_continue_{YYYYMMDD_HHMMSS}.md
 ```
 
-Header must make Phase 0 ignore it for the 5-day clock, e.g.:
-
-```markdown
-# Weekly SEO continue — {project name}
-
-**Date:** {ISO}
-**Continue-only:** yes
-**Measure-only:** yes
-**Spacing:** does not reset mode-executing 5-day clock
-
-## Resolved
-- …
-
-## Still open
-- …
-
-## Outcome
-weekly_outcome_latest.json
-```
-
-**Never** write `weekly_seo_{YYYYMMDD_HHMMSS}.md` from this skill unless it is
-explicitly labeled measure-only/continue-only **and** you understand Phase 0
-treats unlabeled files as mode-executing (prefer the `weekly_seo_continue_*`
-name so status boards and spacing stay honest).
+Keep it short (resolved / still open / outcome path). Prefer chat final
+message over writing MD at all.
 
 ### 8. Final user message (no JSON dumps)
 
@@ -361,9 +345,9 @@ name so status boards and spacing stay honest).
 
 **Outcome:** {path to weekly_outcome_latest.json}
 **Archive:** {path or “none”}
-**Report MD:** {continue MD path or “none (outcome only)”}
+**Human log:** none (outcome only) · or `weekly_continue_{ts}.md` if user asked
 
-**Spacing:** continue did **not** reset the mode-executing 5-day clock.
+**Spacing:** continue wrote **no** `weekly_seo_*.md` and did **not** reset the 5-day clock.
 ```
 
 Rules:
@@ -400,8 +384,9 @@ ln -sf /path/to/pageseeds-app/.agents/skills/weekly-seo-continue/SKILL.md \
 | Concern | weekly-seo | this continue skill |
 |---------|------------|---------------------|
 | Desk / mode / ≤5 growth | Full soft path | **Forbidden** unless a single open decision is that create |
-| Outcome JSON | Writes pair after successful report | Rewrites `latest` (+ optional `_continue` archive) |
-| Spacing clock | Mode-executing MD resets 5d | **Never** resets; no mode-executing MD |
+| Outcome JSON | Writes pair after successful report | Rewrites `latest` (+ optional `_continue` archive) — **only** default artifacts |
+| Spacing clock / `weekly_seo_*.md` | Mode-executing MD resets 5d | **Hard ban** on all `weekly_seo_*.md` writes; clock never resets |
+| Human MD | `weekly_seo_{ts}.md` narrative | Prefer none; rare log only as `weekly_continue_{ts}.md` |
 | Open operator leftovers | Phase 0.5 recheck inside full weekly | **Drain lane** without full weekly |
 | `product_gap` | Report only | List only |
 | Zero opens | Still may run desk if spacing allows | **Clean no-op** |
@@ -413,7 +398,7 @@ ln -sf /path/to/pageseeds-app/.agents/skills/weekly-seo-continue/SKILL.md \
 | Symptom | Cause | Correct behavior |
 |---------|--------|------------------|
 | “I re-ran weekly to finish leftovers” | No continue skill | Use `/weekly-seo-continue <id>` |
-| Spacing reset after continue | Wrote unlabeled `weekly_seo_*.md` | Outcome-only or `weekly_seo_continue_*` + continue-only mark |
+| Spacing / status polluted after continue | Wrote any `weekly_seo_*.md` (incl. `weekly_seo_continue_*`) | Outcome JSON only; hard-ban that glob; rare human log = `weekly_continue_*` only |
 | Invented CTR/research work | Zero operators but agent freestyled | No-op message; optional waiting recheck only |
 | Auto-noindex | Treated confirm as act | Escalate human; leave `open` until confirm |
 | Implemented bulk noindex CLI mid-run | Expanded `product_gap` | List gap; do not eng mid-continue |
@@ -426,8 +411,8 @@ ln -sf /path/to/pageseeds-app/.agents/skills/weekly-seo-continue/SKILL.md \
 - Drain open **`operator_act` then `operator_confirm`** only.  
 - Load outcome via **`pageseeds-cli weekly-outcome`** (file fallback).  
 - Budget ≤**5** exec · ≤**2** creates · prefer cancel/status/list.  
-- Rewrite **`weekly_outcome_latest.json`** + refresh **`followup_prompt`**.  
-- **No** mode-executing weekly; **no** spacing reset.  
+- Rewrite **`weekly_outcome_latest.json`** (+ optional `_continue` archive) + refresh **`followup_prompt`**.  
+- **Hard-ban** all `weekly_seo_*.md` writes; **no** spacing reset. Prefer no human MD.  
 - Zero opens → clean no-op (optional waiting expiry).  
 - `product_gap` / `optional_backlog` list-only.  
 - No product crate edits; no full desk; no inventing work.

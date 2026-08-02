@@ -26,10 +26,11 @@ See [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md) § F. Report.
 [`/weekly-seo-continue`](../.agents/skills/weekly-seo-continue/SKILL.md) loads
 the latest outcome, drains open `operator_act` / `operator_confirm` with CLI
 evidence, and **rewrites** `weekly_outcome_latest.json` (optional
-`weekly_outcome_{ts}_continue.json` archive). It does **not** write a
-mode-executing `weekly_seo_*.md` and therefore **does not** reset the 5-day
-spacing clock. Prefer continue over re-running full weekly just to finish
-leftovers.
+`weekly_outcome_{ts}_continue.json` archive). It **hard-bans all**
+`weekly_seo_*.md` writes (including `weekly_seo_continue_*`) so Phase 0 /
+status spacing and filename parse stay clean — **no** spacing MD from
+continue, therefore **no** 5-day clock reset. Prefer continue over
+re-running full weekly just to finish leftovers.
 
 ---
 
@@ -178,7 +179,7 @@ LEGACY clusters.
 | Skill | Cadence | Writes |
 |-------|---------|--------|
 | [weekly-seo](../.agents/skills/weekly-seo/SKILL.md) | Weekly | Report MD + outcome sidecar JSON pair + **narrow** queue status updates on `seo_program.yaml` |
-| [weekly-seo-continue](../.agents/skills/weekly-seo-continue/SKILL.md) | On demand (leftovers) | Rewrites `weekly_outcome_latest.json` only (+ optional continue archive); **no** mode-executing spacing MD |
+| [weekly-seo-continue](../.agents/skills/weekly-seo-continue/SKILL.md) | On demand (leftovers) | Rewrites `weekly_outcome_latest.json` only (+ optional continue archive); **hard-ban** all `weekly_seo_*.md` (no spacing MD) |
 | [seo-program-review](../.agents/skills/seo-program-review/SKILL.md) | ~monthly / product shift | Full rewrite of program file + proposed `project.yaml` cluster/keyword edits + review report |
 
 Missing `seo_program.yaml`: weekly degrades to desk-default modes and **notes**
@@ -226,6 +227,6 @@ Classic path after research pick remains:
 
 - [PROJECT_MD_STRATEGY.md](./PROJECT_MD_STRATEGY.md) — theme gates SOT  
 - [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md) — weekly consumer  
-- [weekly-seo-continue skill](../.agents/skills/weekly-seo-continue/SKILL.md) — drain open outcome decisions (no spacing reset)  
+- [weekly-seo-continue skill](../.agents/skills/weekly-seo-continue/SKILL.md) — drain open outcome decisions (outcome JSON only; no `weekly_seo_*.md`)  
 - [seo-program-review skill](../.agents/skills/seo-program-review/SKILL.md) — monthly producer  
 
