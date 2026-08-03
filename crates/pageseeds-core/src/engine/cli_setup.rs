@@ -380,15 +380,17 @@ pub fn setup_status(
         });
 
     let license_status = crate::license::status();
-    let gsc_env = std::env::var("GSC_SERVICE_ACCOUNT_PATH")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| {
-            std::env::var("GSC_REPORT_OAUTH_CLIENT_SECRETS")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-        })
-        .is_some();
+    // Use EnvResolver (secrets.env → project .env* → shell), not process env
+    // alone — otherwise setup --status lies with gsc_env_present=false while
+    // gsc-performance works via secrets.env.
+    let resolver = crate::config::env_resolver::EnvResolver::new(&abs_path);
+    let gsc_env = resolver.resolve("GSC_SERVICE_ACCOUNT_PATH").is_some()
+        || resolver
+            .resolve("GOOGLE_APPLICATION_CREDENTIALS")
+            .is_some()
+        || resolver
+            .resolve("GSC_REPORT_OAUTH_CLIENT_SECRETS")
+            .is_some();
 
     let desk_ready = has_global || has_local || project_registered.is_some();
     Ok(SetupStatusOutcome {
@@ -535,6 +537,35 @@ mod tests {
                 None => std::env::remove_var(k),
             }
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn setup_status_gsc_env_present_via_project_env_file() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, conn) = temp_db();
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let sa = dir.join("sa.json");
+        std::fs::write(&sa, "{}").unwrap();
+        std::fs::write(
+            repo.join(".env"),
+            format!("GSC_SERVICE_ACCOUNT_PATH={}", sa.display()),
+        )
+        .unwrap();
+
+        let status = setup_status(
+            Some(&conn),
+            SetupStatusOpts {
+                path: Some(repo.to_string_lossy().to_string()),
+                cwd: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            status.gsc_env_present,
+            "expected gsc_env_present when SA path is in project .env"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

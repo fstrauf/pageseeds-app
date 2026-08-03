@@ -45,26 +45,6 @@ pub(crate) fn exec_gsc_indexing_outcome_inspect(
         .and_then(|v| v["reason_code"].as_str())
         .unwrap_or("unknown");
 
-    // If no token, we can't inspect — return pending
-    let token = match gsc_token {
-        Some(t) => t.to_string(),
-        None => {
-            return StepResult {
-                success: true,
-                message: "No GSC token available — outcome inspection deferred".to_string(),
-                output: Some(
-                    serde_json::json!({
-                        "target_url": target_url,
-                        "status": "deferred",
-                        "previous_reason": previous_reason,
-                    })
-                    .to_string(),
-                ),
-                artifact_key: None,
-            }
-        }
-    };
-
     // Resolve site_url (GSC property): manifest → seo_workspace → projects DB
     let site_url = resolve_site_url(&task.project_id, project_path);
     if site_url.is_empty() {
@@ -74,7 +54,9 @@ pub(crate) fn exec_gsc_indexing_outcome_inspect(
         ));
     }
 
-    // Inspect the URL
+    // Mint SA token when caller injects None (CLI execute-task path). Do not
+    // soft-defer: deferred inspect was reported as still_not_indexed and
+    // misdiagnosed as "OAuth re-auth" in weekly outcomes.
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -83,6 +65,8 @@ pub(crate) fn exec_gsc_indexing_outcome_inspect(
     };
 
     let inspect_result = rt.block_on(async {
+        let token =
+            crate::gsc::auth::resolve_access_token(project_path, gsc_token).await?;
         crate::gsc::indexing::inspect_batch(&token, &site_url, vec![target_url.clone()]).await
     });
 
@@ -138,6 +122,11 @@ pub(crate) fn exec_gsc_indexing_outcome_report(task: &Task, project_path: &str) 
                 .and_then(|c| serde_json::from_str(c).ok())
         });
 
+    let inspect_status = inspect_data
+        .as_ref()
+        .and_then(|v| v["status"].as_str())
+        .unwrap_or("");
+
     let (target_url, previous_reason, current_reason) = inspect_data
         .as_ref()
         .map(|v| {
@@ -155,7 +144,11 @@ pub(crate) fn exec_gsc_indexing_outcome_report(task: &Task, project_path: &str) 
         })
         .unwrap_or_default();
 
-    let outcome_status = if current_reason == "indexed_pass" {
+    // Legacy soft-defer path stored status=deferred without a real inspect.
+    // Do not map that to still_not_indexed (same previous/current unknown).
+    let outcome_status = if inspect_status == "deferred" {
+        "deferred"
+    } else if current_reason == "indexed_pass" {
         "resolved"
     } else if current_reason == previous_reason {
         "still_not_indexed"

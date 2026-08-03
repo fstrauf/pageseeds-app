@@ -67,6 +67,118 @@ pub async fn get_service_account_token(sa_path: &str) -> Result<TokenState> {
     })
 }
 
+/// Resolve GSC service-account JSON path via [`EnvResolver`] precedence
+/// (`secrets.env` → project `.env*` → shell).
+///
+/// Accepts `GSC_SERVICE_ACCOUNT_PATH` or `GOOGLE_APPLICATION_CREDENTIALS`.
+pub fn resolve_service_account_path(project_path: &str) -> Option<String> {
+    let resolver = crate::config::env_resolver::EnvResolver::new(project_path);
+    resolver
+        .resolve("GSC_SERVICE_ACCOUNT_PATH")
+        .or_else(|| resolver.resolve("GOOGLE_APPLICATION_CREDENTIALS"))
+        .map(|(v, _)| v)
+}
+
+/// Prefer a non-empty injected access token; otherwise mint a short-lived
+/// service-account token for the project.
+///
+/// CLI `execute-task` historically passed `None` (desktop injection removed).
+/// Steps that need URL Inspection / Search Analytics must not soft-succeed
+/// without a token — call this instead of treating missing inject as deferred.
+pub async fn resolve_access_token(
+    project_path: &str,
+    injected: Option<&str>,
+) -> Result<String> {
+    if let Some(t) = injected.map(str::trim).filter(|s| !s.is_empty()) {
+        return Ok(t.to_string());
+    }
+    let sa_path = resolve_service_account_path(project_path).ok_or_else(|| {
+        Error::Other(
+            "GSC_SERVICE_ACCOUNT_PATH not configured — set it in ~/.config/automation/secrets.env \
+             (or project .env / GOOGLE_APPLICATION_CREDENTIALS)"
+                .to_string(),
+        )
+    })?;
+    Ok(get_service_account_token(&sa_path).await?.access_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::ENV_LOCK;
+
+    #[test]
+    fn resolve_service_account_path_finds_project_env_or_machine_secrets() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "ps_gsc_auth_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sa = dir.join("sa.json");
+        std::fs::write(&sa, "{}").unwrap();
+        std::fs::write(
+            dir.join(".env"),
+            format!("GSC_SERVICE_ACCOUNT_PATH={}", sa.display()),
+        )
+        .unwrap();
+
+        let resolved = resolve_service_account_path(dir.to_str().unwrap());
+        assert!(
+            resolved.is_some(),
+            "expected SA path from project .env and/or machine secrets.env"
+        );
+        // Machine secrets.env wins over project .env when both set — either is OK.
+        let path = resolved.unwrap();
+        assert!(
+            path == sa.to_string_lossy()
+                || std::path::Path::new(&path).exists()
+                || path.contains("gsc")
+                || path.ends_with(".json"),
+            "unexpected SA path: {path}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn resolve_access_token_prefers_injected() {
+        let token = resolve_access_token("/nonexistent-project-path", Some("injected-token"))
+            .await
+            .unwrap();
+        assert_eq!(token, "injected-token");
+    }
+
+    #[tokio::test]
+    async fn resolve_access_token_fails_without_sa_or_inject() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Isolated temp repo with no GSC keys in project env files. Machine
+        // secrets.env may still win via EnvResolver — skip assert if present.
+        let dir = std::env::temp_dir().join(format!(
+            "ps_gsc_auth_none_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        if resolve_service_account_path(dir.to_str().unwrap()).is_some() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let err = resolve_access_token(dir.to_str().unwrap(), None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("GSC_SERVICE_ACCOUNT_PATH"),
+            "unexpected error: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 // ─── OAuth2 browser flow ──────────────────────────────────────────────────────
 
 pub async fn start_oauth_flow(client_secrets_path: &str) -> Result<TokenState> {

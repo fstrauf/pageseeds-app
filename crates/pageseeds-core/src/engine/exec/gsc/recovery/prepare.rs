@@ -69,10 +69,10 @@ pub(crate) fn exec_gsc_recovery_prepare(
         messages.push(format!("Link scan fresh ({}h old)", link_age.unwrap_or(0)));
     }
 
-    // 3. Optionally refresh GSC data if stale and token available
-    // For V1, we call the existing collect helper when the token is present.
-    // This avoids duplicating the auth + inspect pipeline.
-    if !gsc_fresh && gsc_token.is_some() {
+    // 3. Optionally refresh GSC data if stale.
+    // `collect_gsc` mints its own service-account token — do not gate on the
+    // injected desktop-era `gsc_token` (CLI always passes None).
+    if !gsc_fresh {
         messages.push("Attempting GSC refresh via existing collection helper…".to_string());
         let collect_result =
             crate::engine::exec::gsc::exec_collect_gsc(task, project_path, gsc_token);

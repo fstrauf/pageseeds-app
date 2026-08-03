@@ -480,9 +480,28 @@ fn execute_task(db_path: &str, args: &[String]) -> Result<serde_json::Value, Str
         dry_run: false,
         ignore_not_before: force,
     };
+
+    // Mint SA access token when secrets are present so injected-token steps
+    // (URL Inspection outcome inspect, recovery prepare) work under CLI-only
+    // use. Steps that self-mint still work if this returns None.
+    let gsc_token = {
+        let task = pageseeds_core::engine::task_store::get_task(&conn, &task_id)
+            .map_err(|e| e.to_string())?;
+        let project = pageseeds_core::engine::task_store::get_project(&conn, &task.project_id)
+            .map_err(|e| e.to_string())?;
+        rt.block_on(async {
+            pageseeds_core::gsc::auth::resolve_access_token(&project.path, None)
+                .await
+                .ok()
+        })
+    };
+
     let result = rt.block_on(async {
         pageseeds_core::engine::executor::execute_task_with_token(
-            &conn, &task_id, None, &opts,
+            &conn,
+            &task_id,
+            gsc_token.as_deref(),
+            &opts,
         )
         .await
     })?;
