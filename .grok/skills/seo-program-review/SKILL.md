@@ -1,1 +1,0 @@
-../../../.agents/skills/seo-program-review/SKILL.md

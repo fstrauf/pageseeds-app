@@ -1,0 +1,13 @@
+Copyright (c) PageSeeds / Florian Strauf. All rights reserved.
+
+This repository distributes prebuilt PageSeeds Operator CLI binaries and
+customer-facing documentation. The product source code is private and is not
+licensed as open source.
+
+You may download and use the published binaries and documentation under the
+terms of your PageSeeds Operator license (or the free desk tools without a
+license). You may not redistribute the software as your own product, reverse
+engineer for the purpose of circumventing license checks, or claim the software
+is open source.
+
+See https://www.pageseeds.com/ for licensing and purchase.

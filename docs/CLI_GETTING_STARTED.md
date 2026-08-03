@@ -51,8 +51,8 @@ curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/
 ### Contributor / fallback (checkout + cargo)
 
 ```bash
-./scripts/install-cli.sh              # try download first; cargo if needed
-FROM_SOURCE=1 ./scripts/install-cli.sh  # force cargo build
+# Private monorepo only (maintainers): FROM_SOURCE=1 ./scripts/cli/install-cli.sh
+# Private monorepo only — not shipped in this public repo
 ```
 
 ---

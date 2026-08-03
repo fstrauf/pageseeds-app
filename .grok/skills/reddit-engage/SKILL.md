@@ -1,1 +1,0 @@
-../../../.agents/skills/reddit-engage/SKILL.md

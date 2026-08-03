@@ -151,7 +151,7 @@ A third category **outside the commercial free/paid boundary**. Operator-tier
 tools are neither free-desk nor paid: they are **not sold to customers**, are
 not part of the single-prebuilt-binary promise, and may spawn external
 subprocesses (node, ffmpeg, python — AGENTS.md §5) with PATH detection and
-clear install-hint errors. They assume a **source checkout of pageseeds-app**
+clear install-hint errors. They assume a **source checkout of this monorepo**
 on a developer machine. Code: `OPERATOR_TOOLS` in
 [`crates/pageseeds-core/src/license/mod.rs`](../crates/pageseeds-core/src/license/mod.rs)
 (disjoint from `PAID_TOOLS`; the CLI inventory test asserts
@@ -159,7 +159,7 @@ free ∪ paid ∪ operator = all tools).
 
 | Tool | Notes |
 |------|--------|
-| `video-clip-render` | Renders one clip definition via `<pageseeds-app>/video-engine/generate-clip.sh`. Requires node + ffmpeg on PATH and `video.config.json` in the project ([video clip spec](./video_clip_spec.md)). The free `video-clip-context` + embedded `video-script` skill produce the clip definition; rendering stays operator-side. |
+| `video-clip-render` | Renders one clip definition via `<monorepo>/video-engine/generate-clip.sh`. Requires node + ffmpeg on PATH and `video.config.json` in the project ([video clip spec](./video_clip_spec.md)). The free `video-clip-context` + embedded `video-script` skill produce the clip definition; rendering stays operator-side. |
 
 ---
 
@@ -252,6 +252,6 @@ Code: [`crates/pageseeds-core/src/license/mod.rs`](../crates/pageseeds-core/src/
 | `sub` | Optional | Customer id / email hash / etc. |
 
 - CLI embeds **public** PEM only: [`crates/pageseeds-core/src/license/public_key.pem`](../crates/pageseeds-core/src/license/public_key.pem).
-- **Private key must never be committed** to pageseeds-app. The matching private key is held by the website license mint ([fstrauf/pageseeds](https://github.com/fstrauf/pageseeds) issue #4 / commercial backend).
+- **Private key must never be committed** anywhere in this monorepo. Host secrets only (`PAGESEEDS_LICENSE_PRIVATE_KEY_PEM` on Vercel). Public PEM is embedded in the CLI crate for offline verify.
 - Unit tests use a **separate** RSA pair under `crates/pageseeds-core/src/license/testdata/` (`#[cfg(test)]` only).
 - No phone-home, no seat checks, no desktop gate in this epic.

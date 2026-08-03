@@ -1,1 +1,0 @@
-../../../.agents/skills/weekly-seo/SKILL.md

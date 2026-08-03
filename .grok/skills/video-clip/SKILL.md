@@ -1,1 +1,0 @@
-../../../.agents/skills/video-clip/SKILL.md
