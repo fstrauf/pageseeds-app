@@ -1,4 +1,5 @@
 # Workflows
 
-CLI binaries are **built in the private monorepo** and published to this repo’s Releases.
-There is no source build workflow here on purpose.
+CLI binaries are **built and published from a maintainer machine** (see private monorepo
+`scripts/cli/release-cli-local.sh`). There is no GitHub-hosted build workflow here — by design,
+to avoid expensive macOS runners.
