@@ -34,6 +34,26 @@ Check readiness without changing anything:
 pageseeds-cli setup --status
 ```
 
+### Agent-driven onboarding
+
+An agent can drive the same path (install → setup → connect → first desk value)
+using the operator **onboarding** skill (slash runbook, same layer as
+`/weekly-seo`). Prefer that over re-inventing setup steps mid-session.
+
+| Host | Typical invocation |
+|------|--------------------|
+| Grok / Kimi / Claude-style | `/onboarding` or `/onboarding .` (when skill is on the agent host path) |
+| Free-form | “onboard this project”, “setup and connect”, “first value desk” |
+
+**Canonical skill:** [`.agents/skills/onboarding/SKILL.md`](../.agents/skills/onboarding/SKILL.md)  
+Host discovery (this monorepo): `.grok/skills/onboarding` → that directory. This
+is **not** embedded in the CLI binary — it is an operator agent skill, not a
+task/workflow skill.
+
+The skill sequences existing CLI only (`setup`, `setup --status --json`,
+`connect …`, `site-overview`, `gsc-performance`). It does not invent a second
+free/paid tool list — see [CLI_COMMERCIAL.md](./CLI_COMMERCIAL.md).
+
 ---
 
 ## Install details
@@ -51,8 +71,8 @@ curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/
 ### Contributor / fallback (checkout + cargo)
 
 ```bash
-# Private monorepo only (maintainers): FROM_SOURCE=1 ./scripts/cli/install-cli.sh
-# Private monorepo only — not shipped in this public repo
+./scripts/cli/install-cli.sh          # monorepo: try download first; cargo if needed
+FROM_SOURCE=1 ./scripts/cli/install-cli.sh  # monorepo force cargo build
 ```
 
 ---
@@ -122,10 +142,51 @@ Precedence (first match wins):
 3. `{repo}/.env`
 4. Shell environment
 
-**Minimum for GSC desk reads:**
+**Front door:** `pageseeds-cli connect <provider>` (and `setup --status` → `providers` matrix).
 
-- `GSC_SERVICE_ACCOUNT_PATH` and/or  
-- `GSC_REPORT_OAUTH_CLIENT_SECRETS`
+| Provider | Connect | What to put in secrets.env |
+|----------|---------|----------------------------|
+| `gsc` | `pageseeds-cli connect gsc` (or `gsc-connect`) | `GSC_OAUTH_CLIENT_ID` then browser OAuth → writes `GSC_OAUTH_REFRESH_TOKEN` |
+| `dataforseo` | `connect dataforseo --login L --password P` (verifies, then writes secrets) | `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD` |
+| `reddit` | `connect reddit [--client-id … --client-secret …]` (browser OAuth); optional `--configure --topics a,b --subreddits x,y` | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_REFRESH_TOKEN` (all three) |
+| `llm` | `connect llm` (detection matrix); `connect llm --provider kimi\|claude\|openai\|grok\|ollama` (sets global `agent_provider`) | kimi/grok CLI on PATH, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`, or Ollama on `:11434` |
+| `posthog` | `connect posthog` (stub + fix) | `POSTHOG_API_KEY` |
+| `clarity` | `connect clarity` (stub + fix) | `CLARITY_API_TOKEN` |
+
+Check readiness without mutating anything:
+
+```bash
+pageseeds-cli setup --status --json
+# → providers.gsc.state, providers.reddit.fix, …
+```
+
+**Minimum for GSC desk reads** — browser connect (recommended):
+
+1. Create a **Desktop** OAuth client in Google Cloud Console with redirect URI
+   `http://127.0.0.1:8085`.
+2. Put the client id in secrets:
+
+```bash
+# ~/.config/automation/secrets.env (or project .env)
+GSC_OAUTH_CLIENT_ID=your-desktop-client-id.apps.googleusercontent.com
+```
+
+3. Connect:
+
+```bash
+pageseeds-cli connect gsc
+# equivalent legacy alias:
+pageseeds-cli gsc-connect
+```
+
+This opens Google consent (PKCE, loopback `127.0.0.1:8085`) and writes
+`GSC_OAUTH_REFRESH_TOKEN` to `~/.config/automation/secrets.env`. The CLI refuses
+to start OAuth if `GSC_OAUTH_CLIENT_ID` is missing.
+
+**Advanced (CI / service account):**
+
+- `GSC_SERVICE_ACCOUNT_PATH` or `GOOGLE_APPLICATION_CREDENTIALS` (JSON key path)
+  — no OAuth client id needed for service-account auth
 
 ---
 
@@ -145,6 +206,59 @@ pageseeds-cli write-submit -f <mdx-path>
 # Catalog stays draft until explicit publish:
 pageseeds-cli publish-content -S <slug>
 ```
+
+### Operator runs (schedule + status)
+
+Configure skill cadence and read last-run status (paid). SQLite SoT is core `operator_runs`; CLI is thin JSON I/O only.
+
+```bash
+pageseeds-cli operator-runs enable -i coffee --skill weekly_seo --every 5d
+pageseeds-cli operator-runs enable -i coffee --skill reddit_engage --every 2d
+pageseeds-cli operator-runs status -i coffee
+pageseeds-cli operator-runs run -i coffee --skill weekly_seo
+pageseeds-cli operator-runs tick --dry-run   # preview due skills
+pageseeds-cli operator-runs install-helper   # macOS: hourly LaunchAgent for tick
+```
+
+Skills: `weekly_seo` (default 5d), `reddit_engage` (2d), `video_clip` (3d). Cadence is `last_finished_at + interval_days` (optional `--hour` is stored but **not** used by due-eval yet). `status` is the JSON read API; `tick` + `install-helper` run unattended due schedules on macOS.
+
+**Full guide** (all commands, LaunchAgent contract, status field list, migration from agent_jobs, cutover): [OPERATOR_RUNS.md](./OPERATOR_RUNS.md).
+
+---
+
+## Optional: native menu bar companion
+
+macOS only. A small **MenuBarExtra** app that **projects**  
+`pageseeds-cli operator-runs status` JSON into the menu bar (poll every 60s).  
+It does **not** replace the CLI: no SQLite, no second status store, no skill logic.  
+The CLI alone remains complete for all operator workflows.
+
+**Status surface:** `operator-runs status` (issue #59) is the JSON source the menu bar polls. Run / continue menu actions shell out to `operator-runs run` / `continue` and fail cleanly if those subcommands are not installed yet.
+
+### Build & install
+
+```bash
+cd apps/operator-menubar
+./install.sh
+# → ~/Applications/PageSeeds Operator Menubar.app
+open ~/Applications/PageSeeds\ Operator\ Menubar.app
+```
+
+Dev loop without installing:
+
+```bash
+cd apps/operator-menubar
+swift test
+swift run          # menu bar while the process runs
+```
+
+### Uninstall
+
+```bash
+rm -rf ~/Applications/PageSeeds\ Operator\ Menubar.app
+```
+
+Details: [apps/operator-menubar/README.md](../apps/operator-menubar/README.md).
 
 ---
 
@@ -196,6 +310,7 @@ Machine contract details (stdout/stderr/exit codes): [CONTRACTS.md](../CONTRACTS
 | Doc / link | Role |
 |------------|------|
 | [CLI_COMMERCIAL.md](./CLI_COMMERCIAL.md) | Free vs paid tool names |
+| [OPERATOR_RUNS.md](./OPERATOR_RUNS.md) | Operator skill cadence, status SoT, dual-status cutover |
 | [CLI_RELEASE.md](./CLI_RELEASE.md) | Version bump, `cli-v*` tags, GitHub release |
 | [PROJECT_MD_STRATEGY.md](./PROJECT_MD_STRATEGY.md) | Strategy in `project.yaml` (+ legacy MD migrate); `strategy` / `project-config-status` / `migrate-project-config` |
 | [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md) | Weekly operator policy |

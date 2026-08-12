@@ -92,7 +92,7 @@ Meta help/version/license stay free. Setup/list/create/gsc-connect/connect/sync-
 
 ---
 
-## Paid (license required) — 27 tools
+## Paid (license required) — 28 tools
 
 ### Path B package / submit
 
@@ -112,6 +112,7 @@ Meta help/version/license stay free. Setup/list/create/gsc-connect/connect/sync-
 |------|--------|
 | `research-pull` | Pull research / start pipeline (not inspect-only) |
 | `keyword-explore` | Exploratory opportunity scout: seed discovery + optional live SERP deep pass; **report only** (no task spawn). Spends DataForSEO credits. |
+| `page-fetch` | Research assist: explicit HTTPS URL → bounded HTML main-text excerpt + fetch metadata as JSON (**report only**; no matrix write, no competitors.yaml mutation). Third-party page fetch for matrix facts (`source_url` + `as_of`). |
 | `create-articles-from-keywords` | Spawn articles from keywords |
 
 ### Task / lifecycle act
@@ -146,8 +147,8 @@ Meta help/version/license stay free. Setup/list/create/gsc-connect/connect/sync-
 | `compare-rendered` | Compare rendered output |
 | `operator-runs` | Operator skill schedule, status, skill runner, and unattended tick (`list-skills` / `list` / `enable` / `disable` / `status` / `run` / `continue` / `tick` / `install-helper` / `uninstall-helper`) |
 
-**Paid tool names (27):**  
-`write-context`, `write-submit`, `publish-content`, `fix-context`, `fix-submit`, `merge-context`, `merge-submit`, `research-pull`, `keyword-explore`, `create-articles-from-keywords`, `create-task`, `execute-task`, `cancel-tasks`, `update-task-status`, `set-task-status`, `select-keywords`, `select-content-review`, `select-cannibalization`, `create-tasks-from-approved`, `set-review-status`, `create-reddit-replies`, `run-content-audit`, `cannibalization-strategy`, `score-zero-impression-articles`, `write-feature-spec`, `compare-rendered`, `operator-runs`
+**Paid tool names (28):**  
+`write-context`, `write-submit`, `publish-content`, `fix-context`, `fix-submit`, `merge-context`, `merge-submit`, `research-pull`, `keyword-explore`, `page-fetch`, `create-articles-from-keywords`, `create-task`, `execute-task`, `cancel-tasks`, `update-task-status`, `set-task-status`, `select-keywords`, `select-content-review`, `select-cannibalization`, `create-tasks-from-approved`, `set-review-status`, `create-reddit-replies`, `run-content-audit`, `cannibalization-strategy`, `score-zero-impression-articles`, `write-feature-spec`, `compare-rendered`, `operator-runs`
 
 ---
 
@@ -196,7 +197,7 @@ Inventory check for implementers:
 
 - free ∪ paid ∪ operator = all match-arm tools
 - free ∩ paid = empty; operator ∩ (free ∪ paid) = empty
-- Current lock: **35 free + 26 paid + 1 operator** = **62** match-arm tools (`TOOLS.len()` in `pageseeds-cli`; free includes meta `list-projects` / `create-project` / `setup` / `gsc-connect` / `connect` / `sync-site-urls`)
+- Current lock: **35 free + 28 paid + 1 operator** = **64** match-arm tools (`TOOLS.len()` in `pageseeds-cli`; free includes meta `list-projects` / `create-project` / `setup` / `gsc-connect` / `connect` / `sync-site-urls`)
 
 ---
 
