@@ -214,13 +214,15 @@ Configure skill cadence and read last-run status (paid). SQLite SoT is core `ope
 ```bash
 pageseeds-cli operator-runs enable -i coffee --skill weekly_seo --every 5d
 pageseeds-cli operator-runs enable -i coffee --skill reddit_engage --every 2d
+pageseeds-cli operator-runs enable -i coffee --skill workspace_cmd:coffees-research --every 1d \
+  --cmd 'npm run coffees:research -- --apply --limit=40'
 pageseeds-cli operator-runs status -i coffee
 pageseeds-cli operator-runs run -i coffee --skill weekly_seo
 pageseeds-cli operator-runs tick --dry-run   # preview due skills
 pageseeds-cli operator-runs install-helper   # macOS: hourly LaunchAgent for tick
 ```
 
-Skills: `weekly_seo` (default 5d), `reddit_engage` (2d), `video_clip` (3d). Cadence is `last_finished_at + interval_days` (optional `--hour` is stored but **not** used by due-eval yet). `status` is the JSON read API; `tick` + `install-helper` run unattended due schedules on macOS.
+Skills: `weekly_seo` (default 5d), `reddit_engage` (2d), `video_clip` (3d), plus named `workspace_cmd:<name>` jobs (default 1d; `--cmd` required). Cadence is `last_finished_at + interval_days` (optional `--hour` is stored but **not** used by due-eval yet). `status` is the JSON read API; `tick` + `install-helper` run unattended due schedules on macOS.
 
 **Full guide** (all commands, LaunchAgent contract, status field list, migration from agent_jobs, cutover): [OPERATOR_RUNS.md](./OPERATOR_RUNS.md).
 
