@@ -243,7 +243,7 @@ The CLI alone remains complete for all operator workflows.
 cd apps/operator-menubar
 ./install.sh
 # → ~/Applications/PageSeeds Operator Menubar.app
-open ~/Applications/PageSeeds\ Operator\ Menubar.app
+#    + Open at Login (LaunchAgent); launches now
 ```
 
 Dev loop without installing:
@@ -257,6 +257,8 @@ swift run          # menu bar while the process runs
 ### Uninstall
 
 ```bash
+launchctl bootout "gui/$(id -u)/com.pageseeds.operator-menubar" 2>/dev/null || true
+rm -f ~/Library/LaunchAgents/com.pageseeds.operator-menubar.plist
 rm -rf ~/Applications/PageSeeds\ Operator\ Menubar.app
 ```
 
