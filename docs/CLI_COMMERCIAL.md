@@ -27,7 +27,7 @@ Owner decision 2026-07-25. Do not re-open in docs-only or gate PRs without a pro
 
 ---
 
-## Free (no license) — 35 tools
+## Free (no license) — 36 tools
 
 Meta help/version/license stay free. Setup/list/create/gsc-connect/connect/sync-site-urls are match-arm free tools (no paid gate, no `-i`/`-p` required up front).
 
@@ -58,6 +58,7 @@ Meta help/version/license stay free. Setup/list/create/gsc-connect/connect/sync-
 | `article-link-graph` | Internal link graph |
 | `framework-files` | Framework / skill files |
 | `video-clip-context` | Article context JSON for the `video-script` skill (local reads only) |
+| `video-clip-list` | Clip definition ledger (SQLite; hydrates leftover `video/clips/*.json`) |
 
 ### GSC / health reads
 
@@ -87,8 +88,8 @@ Meta help/version/license stay free. Setup/list/create/gsc-connect/connect/sync-
 | `get-task` | Get one task |
 | `validate-article` | Validate article structure |
 
-**Free tool names (35):**  
-`list-projects`, `create-project`, `setup`, `gsc-connect`, `connect`, `sync-site-urls`, `site-overview`, `ctr-outcomes`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `video-clip-context`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `weekly-outcome`, `ai-visibility-audit`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `strategy`, `project-config-status`, `migrate-project-config`, `list-tasks`, `get-task`, `validate-article`
+**Free tool names (36):**  
+`list-projects`, `create-project`, `setup`, `gsc-connect`, `connect`, `sync-site-urls`, `site-overview`, `ctr-outcomes`, `articles`, `article`, `article-list`, `article-frontmatter`, `article-body-hash`, `article-title-scan`, `article-link-graph`, `framework-files`, `video-clip-context`, `video-clip-list`, `gsc-performance`, `gsc-queries`, `gsc-movers`, `indexing-status`, `ctr-health`, `content-audit-report`, `weekly-outcome`, `ai-visibility-audit`, `cannibalization-clusters`, `research-shortlist`, `article-quality-reviews`, `research-context`, `strategy`, `project-config-status`, `migrate-project-config`, `list-tasks`, `get-task`, `validate-article`
 
 ---
 
@@ -153,7 +154,7 @@ Meta help/version/license stay free. Setup/list/create/gsc-connect/connect/sync-
 
 ---
 
-## Operator tier (no license, dev-machine only) — 1 tool
+## Operator tier (no license, dev-machine only) — 3 tools
 
 A third category **outside the commercial free/paid boundary**. Operator-tier
 tools are neither free-desk nor paid: they are **not sold to customers**, are
@@ -167,7 +168,9 @@ free ∪ paid ∪ operator = all tools).
 
 | Tool | Notes |
 |------|--------|
-| `video-clip-render` | Renders one clip definition via `<monorepo>/video-engine/generate-clip.sh`. Requires node + ffmpeg on PATH and `video.config.json` in the project ([video clip spec](./video_clip_spec.md)). The free `video-clip-context` + embedded `video-script` skill produce the clip definition; rendering stays operator-side. |
+| `video-clip-render` | Renders one clip definition via `<monorepo>/video-engine/generate-clip.sh`. Requires node + ffmpeg on PATH and `video.config.json` in the project ([video clip spec](./video_clip_spec.md)). Prefer `--slug` (loads SQLite + working file); `--clip <path>` still works. |
+| `video-clip-save` | Upsert schema-v1 clip JSON into app SQLite and materialize `~/01_code/video-clip-backup/<project_id>/clips/<slug>.json`. `--json` to create; `-S` to re-ingest `publish.py` write-back. |
+| `video-clip-ship-embed` | Worktree PR of **one** content MDX embed (`git commit --no-verify`, no `pnpm test`). Cleans the worktree and restores the live file. |
 
 ---
 
@@ -198,7 +201,7 @@ Inventory check for implementers:
 
 - free ∪ paid ∪ operator = all match-arm tools
 - free ∩ paid = empty; operator ∩ (free ∪ paid) = empty
-- Current lock: **35 free + 29 paid + 1 operator** = **65** match-arm tools (`TOOLS.len()` in `pageseeds-cli`; free includes meta `list-projects` / `create-project` / `setup` / `gsc-connect` / `connect` / `sync-site-urls`)
+- Current lock: **36 free + 29 paid + 3 operator** = **68** match-arm tools (`TOOLS.len()` in `pageseeds-cli`; free includes meta `list-projects` / `create-project` / `setup` / `gsc-connect` / `connect` / `sync-site-urls`)
 
 ---
 
