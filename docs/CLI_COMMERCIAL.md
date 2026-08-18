@@ -93,7 +93,7 @@ Meta help/version/license stay free. Setup/list/create/gsc-connect/connect/sync-
 
 ---
 
-## Paid (license required) — 29 tools
+## Paid (license required) — 30 tools
 
 ### Path B package / submit
 
@@ -148,9 +148,10 @@ Meta help/version/license stay free. Setup/list/create/gsc-connect/connect/sync-
 | `write-feature-spec` | Generate feature spec |
 | `compare-rendered` | Compare rendered output |
 | `operator-runs` | Operator skill schedule, status, skill runner, and unattended tick (`list-skills` / `list` / `enable` / `disable` / `status` / `run` / `continue` / `tick` / `install-helper` / `uninstall-helper`). Also `workspace_cmd:<name>` project commands (not a new tool). |
+| `worktree` | Isolate agent writes in a git worktree and ship a content PR (`begin` / `ship` / `abort` / `status`). Scheduled `operator-runs` begins/ships automatically. |
 
-**Paid tool names (29):**  
-`write-context`, `write-submit`, `publish-content`, `fix-context`, `fix-submit`, `merge-context`, `merge-submit`, `research-pull`, `keyword-explore`, `page-fetch`, `reddit-search`, `create-articles-from-keywords`, `create-task`, `execute-task`, `cancel-tasks`, `update-task-status`, `set-task-status`, `select-keywords`, `select-content-review`, `select-cannibalization`, `create-tasks-from-approved`, `set-review-status`, `create-reddit-replies`, `run-content-audit`, `cannibalization-strategy`, `score-zero-impression-articles`, `write-feature-spec`, `compare-rendered`, `operator-runs`
+**Paid tool names (30):**  
+`write-context`, `write-submit`, `publish-content`, `fix-context`, `fix-submit`, `merge-context`, `merge-submit`, `research-pull`, `keyword-explore`, `page-fetch`, `reddit-search`, `create-articles-from-keywords`, `create-task`, `execute-task`, `cancel-tasks`, `update-task-status`, `set-task-status`, `select-keywords`, `select-content-review`, `select-cannibalization`, `create-tasks-from-approved`, `set-review-status`, `create-reddit-replies`, `run-content-audit`, `cannibalization-strategy`, `score-zero-impression-articles`, `write-feature-spec`, `compare-rendered`, `operator-runs`, `worktree`
 
 ---
 
@@ -201,7 +202,7 @@ Inventory check for implementers:
 
 - free ∪ paid ∪ operator = all match-arm tools
 - free ∩ paid = empty; operator ∩ (free ∪ paid) = empty
-- Current lock: **36 free + 29 paid + 3 operator** = **68** match-arm tools (`TOOLS.len()` in `pageseeds-cli`; free includes meta `list-projects` / `create-project` / `setup` / `gsc-connect` / `connect` / `sync-site-urls`)
+- Current lock: **36 free + 30 paid + 3 operator** = **69** match-arm tools (`TOOLS.len()` in `pageseeds-cli`; free includes meta `list-projects` / `create-project` / `setup` / `gsc-connect` / `connect` / `sync-site-urls`)
 
 ---
 

@@ -224,6 +224,8 @@ pageseeds-cli operator-runs install-helper   # macOS: hourly LaunchAgent for tic
 
 Skills: `weekly_seo` (default 5d), `reddit_engage` (2d), `video_clip` (3d), plus named `workspace_cmd:<name>` jobs (default 1d; `--cmd` required). Cadence is `last_finished_at + interval_days` (optional `--hour` is stored but **not** used by due-eval yet). `status` is the JSON read API; `tick` + `install-helper` run unattended due schedules on macOS.
 
+Agent skills run in a **git worktree** and ship a content PR on exit (`artifacts.pr_url`). Interactive isolate/ship: `pageseeds-cli worktree begin|ship -i <id>`. The live checkout stays clean.
+
 **Full guide** (all commands, LaunchAgent contract, status field list, migration from agent_jobs, cutover): [OPERATOR_RUNS.md](./OPERATOR_RUNS.md).
 
 ---
