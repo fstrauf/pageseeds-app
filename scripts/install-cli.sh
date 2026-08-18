@@ -215,6 +215,23 @@ print_path_warning() {
   fi
 }
 
+# Re-bootstrap the hourly tick LaunchAgent after a binary replace. launchd caches
+# a code requirement against Program; without this, the next tick dies with
+# OS_REASON_CODESIGNING. No-op when the helper is not installed or not macOS.
+refresh_operator_runs_helper() {
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    return 0
+  fi
+  local plist="${HOME}/Library/LaunchAgents/com.pageseeds.operator-runs.plist"
+  if [[ ! -f "${plist}" ]]; then
+    return 0
+  fi
+  info "Refreshing operator-runs LaunchAgent (binary replace)..."
+  if ! "${TARGET_BIN}" operator-runs install-helper >/dev/null; then
+    echo "warning: operator-runs install-helper failed; unattended tick may stall until you re-run it" >&2
+  fi
+}
+
 print_gatekeeper_note() {
   cat <<EOF
 
@@ -233,6 +250,7 @@ complete_install() {
     print_gatekeeper_note
   fi
   verify_install
+  refresh_operator_runs_helper
   info "OK -- ${BIN_NAME} is ready (use from any directory; do not open pageseeds-app for SEO ops)."
   echo ""
   echo "Next step: in your customer project repo, run:"
