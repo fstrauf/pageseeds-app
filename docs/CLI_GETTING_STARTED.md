@@ -149,7 +149,7 @@ Precedence (first match wins):
 | `gsc` | `pageseeds-cli connect gsc` (or `gsc-connect`) | `GSC_OAUTH_CLIENT_ID` then browser OAuth → writes `GSC_OAUTH_REFRESH_TOKEN` |
 | `dataforseo` | `connect dataforseo --login L --password P` (verifies, then writes secrets) | `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD` |
 | `reddit` | `connect reddit [--client-id … --client-secret …]` (browser OAuth); optional `--configure --topics a,b --subreddits x,y` | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_REFRESH_TOKEN` (all three) |
-| `llm` | `connect llm` (detection matrix); `connect llm --provider kimi\|claude\|openai\|grok\|ollama` (sets global `agent_provider`) | kimi/grok CLI on PATH, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`, or Ollama on `:11434` |
+| `llm` | `connect llm` (detection matrix); `connect llm --provider kimi\|claude\|openai\|grok\|ollama\|deepseek` (sets global `agent_provider`) | kimi/grok CLI on PATH, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` (DeepSeek via OpenRouter), or Ollama on `:11434` |
 | `posthog` | `connect posthog` (stub + fix) | `POSTHOG_API_KEY` |
 | `clarity` | `connect clarity` (stub + fix) | `CLARITY_API_TOKEN` |
 
