@@ -1,0 +1,8 @@
+{
+  "name": "pageseeds",
+  "description": "PageSeeds operator skills: an SEO pass for your side project, driven by pageseeds-cli. Changes arrive as pull requests.",
+  "author": {
+    "name": "PageSeeds"
+  },
+  "homepage": "https://pageseeds.com"
+}

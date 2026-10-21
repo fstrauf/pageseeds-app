@@ -38,7 +38,7 @@ pageseeds-cli setup --status
 
 An agent can drive the same path (install → setup → connect → first desk value)
 using the operator **onboarding** skill (slash runbook, same layer as
-`/weekly-seo`). Prefer that over re-inventing setup steps mid-session.
+`/pageseeds-run`). Prefer that over re-inventing setup steps mid-session.
 
 | Host | Typical invocation |
 |------|--------------------|
@@ -71,8 +71,8 @@ curl -fsSL https://raw.githubusercontent.com/fstrauf/pageseeds-app/main/scripts/
 ### Contributor / fallback (checkout + cargo)
 
 ```bash
-./scripts/cli/install-cli.sh          # monorepo: try download first; cargo if needed
-FROM_SOURCE=1 ./scripts/cli/install-cli.sh  # monorepo force cargo build
+./scripts/cli/install-cli.sh          # monorepo: cargo build of the checkout (default)
+FROM_SOURCE=0 ./scripts/cli/install-cli.sh  # monorepo: install the latest public release
 ```
 
 ---
@@ -102,8 +102,11 @@ After setup, data tools resolve project id/path in this order (first wins):
 1. Flags: `-i` / `--project-id`, `-p` / `--project-path` (**always override**)
 2. Env: `PAGESEEDS_PROJECT_ID`, `PAGESEEDS_PROJECT_PATH`
 3. Local: `.pageseeds.yaml` in **cwd** (`project_id`)
-4. Global: `config.toml` defaults
-5. Registry fill: missing path looked up by id; missing id looked up by path
+4. Registry: missing path looked up by id; missing id looked up by path
+5. Global: `config.toml` defaults
+
+Id and path resolve as a pair: `-i <id>` alone uses that project's registered
+path, never the global default project's path (pass `-p` to override).
 
 If nothing resolves:
 
@@ -124,7 +127,7 @@ pageseeds-cli license status
 pageseeds-cli setup --path . --yes --license <key>
 ```
 
-Paid tools (write/fix/merge, research-pull, task act, audits that write) require a valid license. Free desk/GSC/inspect/setup tools work without one. See [CLI_COMMERCIAL.md](./CLI_COMMERCIAL.md).
+Paid tools (write/fix/merge, run, task act, audits that write) require a valid license, except for one free weekly pass per machine: your first weekly run, through to its pull request (or 7 days), works without a key. Free desk/GSC/inspect/setup tools always work without one. See [CLI_COMMERCIAL.md](./CLI_COMMERCIAL.md).
 
 | Link | Status |
 |------|--------|
@@ -149,7 +152,7 @@ Precedence (first match wins):
 | `gsc` | `pageseeds-cli connect gsc` (or `gsc-connect`) | `GSC_OAUTH_CLIENT_ID` then browser OAuth → writes `GSC_OAUTH_REFRESH_TOKEN` |
 | `dataforseo` | `connect dataforseo --login L --password P` (verifies, then writes secrets) | `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD` |
 | `reddit` | `connect reddit [--client-id … --client-secret …]` (browser OAuth); optional `--configure --topics a,b --subreddits x,y` | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_REFRESH_TOKEN` (all three) |
-| `llm` | `connect llm` (detection matrix); `connect llm --provider kimi\|claude\|openai\|grok\|ollama\|deepseek` (sets global `agent_provider`) | kimi/grok CLI on PATH, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` (DeepSeek via OpenRouter), or Ollama on `:11434` |
+| `llm` | `connect llm` (detection matrix); `connect llm --provider kimi\|claude\|claude-code\|openai\|grok\|ollama\|deepseek` (sets global `agent_provider`) | kimi/grok/claude CLI on PATH, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` (DeepSeek via OpenRouter), or Ollama on `:11434` |
 | `posthog` | `connect posthog` (stub + fix) | `POSTHOG_API_KEY` |
 | `clarity` | `connect clarity` (stub + fix) | `CLARITY_API_TOKEN` |
 
@@ -190,18 +193,18 @@ to start OAuth if `GSC_OAUTH_CLIENT_ID` is missing.
 
 ---
 
-## Weekly operator path
+## The SEO run path
 
-**Operator bible:** [`.agents/skills/weekly-seo/SKILL.md`](../.agents/skills/weekly-seo/SKILL.md)
+**Operator skill:** [`.agents/skills/pageseeds-run/SKILL.md`](../.agents/skills/pageseeds-run/SKILL.md) · contract: [RUN.md](./RUN.md)
 
 1. **Desk-first** — `site-overview` → `articles` / `article` / `gsc-queries`
-2. **≤5 actions** — highest-impact only
-3. Do **not** nest `content_review` as the weekly strategy brain
+2. **One run, one PR** — `pageseeds-cli run -i <id>` plans a quota worklist (create, merge, prune rows); the session agent works the rows; `run finish` ships one pull request
+3. Do **not** nest an agent as the strategy brain
 
 Path B write (paid):
 
 ```bash
-pageseeds-cli write-context -I <research-task-id> -K "<keyword>"
+pageseeds-cli write-context -K "<keyword>" --worklist   # a run create row (or a competitors.yaml hub/seed keyword)
 pageseeds-cli write-submit -f <mdx-path>
 # Catalog stays draft until explicit publish:
 pageseeds-cli publish-content -S <slug>
@@ -212,17 +215,17 @@ pageseeds-cli publish-content -S <slug>
 Configure skill cadence and read last-run status (paid). SQLite SoT is core `operator_runs`; CLI is thin JSON I/O only.
 
 ```bash
-pageseeds-cli operator-runs enable -i coffee --skill weekly_seo --every 5d
+pageseeds-cli operator-runs enable -i coffee --skill pageseeds_run --every 7d
 pageseeds-cli operator-runs enable -i coffee --skill reddit_engage --every 2d
 pageseeds-cli operator-runs enable -i coffee --skill workspace_cmd:coffees-research --every 1d \
   --cmd 'npm run coffees:research -- --apply --limit=40'
 pageseeds-cli operator-runs status -i coffee
-pageseeds-cli operator-runs run -i coffee --skill weekly_seo
+pageseeds-cli operator-runs run -i coffee --skill pageseeds_run
 pageseeds-cli operator-runs tick --dry-run   # preview due skills
-pageseeds-cli operator-runs install-helper   # macOS: hourly LaunchAgent for tick
+pageseeds-cli operator-runs install-helper   # macOS: 15-min LaunchAgent for tick (also sweeps merged worktrees)
 ```
 
-Skills: `weekly_seo` (default 5d), `reddit_engage` (2d), `video_clip` (3d), plus named `workspace_cmd:<name>` jobs (default 1d; `--cmd` required). Cadence is `last_finished_at + interval_days` (optional `--hour` is stored but **not** used by due-eval yet). `status` is the JSON read API; `tick` + `install-helper` run unattended due schedules on macOS.
+Skills: `pageseeds_run` (default 7d), `reddit_engage` (2d), `video_clip` (3d), plus named `workspace_cmd:<name>` jobs (default 1d; `--cmd` required). Cadence is `last_finished_at + interval_days` (optional `--hour` is stored but **not** used by due-eval yet). `status` is the JSON read API; `tick` + `install-helper` run unattended due schedules on macOS. The LaunchAgent execs the CLI through `/bin/sh` so a binary replace does not stall the tick.
 
 Agent skills run in a **git worktree** and ship a content PR on exit (`artifacts.pr_url`). Interactive isolate/ship: `pageseeds-cli worktree begin|ship -i <id>`. The live checkout stays clean.
 
@@ -307,7 +310,7 @@ Machine contract details (stdout/stderr/exit codes): [CONTRACTS.md](../CONTRACTS
 | No project context / “run setup” | `pageseeds-cli setup --path . --yes` then retry |
 | Wrong project after multi-repo work | Pass `-i`/`-p`, or re-run setup in the target repo |
 | GSC empty / auth errors | Secrets chain + `site_url` on the project |
-| Paid command requires license | `license activate` or `setup --license <key>` |
+| Paid command requires license | `license activate` or `setup --license <key>` (the free weekly pass is used or expired; `license status` shows `free_pass`) |
 
 ---
 
@@ -319,7 +322,7 @@ Machine contract details (stdout/stderr/exit codes): [CONTRACTS.md](../CONTRACTS
 | [OPERATOR_RUNS.md](./OPERATOR_RUNS.md) | Operator skill cadence, status SoT, dual-status cutover |
 | [CLI_RELEASE.md](./CLI_RELEASE.md) | Version bump, `cli-v*` tags, GitHub release |
 | [PROJECT_MD_STRATEGY.md](./PROJECT_MD_STRATEGY.md) | Strategy in `project.yaml` (+ legacy MD migrate); `strategy` / `project-config-status` / `migrate-project-config` |
-| [weekly-seo skill](../.agents/skills/weekly-seo/SKILL.md) | Weekly operator policy |
+| [RUN.md](./RUN.md) · [pageseeds-run skill](../.agents/skills/pageseeds-run/SKILL.md) | The v2 SEO run |
 | [CONTRACTS.md](../CONTRACTS.md) | Runtime / machine contracts |
 | [issue #177](https://github.com/fstrauf/pageseeds-app/issues/177) | Setup wizard |
 | [issue #156](https://github.com/fstrauf/pageseeds-app/issues/156) | License gate |

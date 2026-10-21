@@ -1,0 +1,14 @@
+{
+  "name": "pageseeds",
+  "description": "PageSeeds operator skills: an SEO pass for your side project, driven by pageseeds-cli. Changes arrive as pull requests.",
+  "owner": {
+    "name": "PageSeeds"
+  },
+  "plugins": [
+    {
+      "name": "pageseeds",
+      "source": "./plugins/pageseeds",
+      "description": "PageSeeds operator skills: an SEO pass for your side project, driven by pageseeds-cli. Changes arrive as pull requests."
+    }
+  ]
+}
